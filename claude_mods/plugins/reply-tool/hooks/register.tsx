@@ -59,9 +59,6 @@ type Book = { input: unknown; rejections: number; calls: number; isDelivered: bo
 const fresh = (): Book => ({ input: undefined, rejections: 0, calls: 0, isDelivered: false, deliveredIssues: 0, isClosed: false })
 const loopOf = (agentId: string | undefined): string => agentId ?? 'main'
 
-// What the closing step says: nothing a person can see.
-const CLOSING = '\u200b'
-
 
 export const register: Register = on => {
   // `tool.call` carries no turn id on this build, so a loop's turn is bounded by its own
@@ -218,8 +215,8 @@ export const register: Register = on => {
     )
   })
 
-  // The closing row (a zero-width space) is drawn as nothing.
-  on('ui.render', { component: 'AssistantMessage', props: { text: /^[\u200b\s]*\u200b[\u200b\s]*$/ } }, ($, e) => {
+  // The closing row (the marked reply text, or a bare zero-width space) is drawn as nothing in the terminal.
+  on('ui.render', { component: 'AssistantMessage', props: { text: CLOSING_MATCHER } }, ($, e) => {
     const { Box } = $.ui.resolve(e)
     return <Box display="none" />
   })
