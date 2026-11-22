@@ -37,7 +37,7 @@ const LINK = '* Report: `/tmp/r.html` · [file:///tmp/r.html](file:///tmp/r.html
 
 test('a sample reply renders as tldr, exec and full', () => {
   expect(renderReply(SAMPLE, 'tldr')).toBe(
-    ['Partly: checkout is fixed, shipping waits on QA.', '★ Ship, the risk is low.', LINK].join('\n\n'),
+    ['Partly: checkout is fixed, shipping waits on QA.', '★ **Ship Friday?** Ship, the risk is low.', LINK].join('\n\n'),
   )
 
   const exec = renderReply(SAMPLE, 'exec')
@@ -62,6 +62,17 @@ test('a sample reply renders as tldr, exec and full', () => {
   // An empty answer falls back to the verdicts as bullets as tldr.
   expect(renderReply({ ...SAMPLE, answer: '', decisions: [], links: [] }, 'tldr')).toBe(
     '- No, failures fell from 4% to 0.1%.\n- Yes, if QA signs off Thursday.',
+  )
+})
+
+test('tldr draws each decision as star, bold choice, pick, and falls back when the choice is empty', () => {
+  const [first] = SAMPLE.decisions
+  const second = { ...first, choice: 'Notify users?', pick: 'Yes, a short note.' }
+  const tldr = renderReply({ ...SAMPLE, answer: 'A', decisions: [first, second], links: [] }, 'tldr')
+  expect(tldr).toContain('★ **Ship Friday?** Ship, the risk is low.')
+  expect(tldr).toContain('★ **Notify users?** Yes, a short note.')
+  expect(renderReply({ ...SAMPLE, answer: 'A', decisions: [{ ...first, choice: '' }], links: [] }, 'tldr')).toBe(
+    'A\n\n★ Ship, the risk is low.',
   )
 })
 

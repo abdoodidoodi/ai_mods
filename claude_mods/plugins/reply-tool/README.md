@@ -54,7 +54,7 @@ reply-tool is off at the start of every session. Two commands:
 
 What each view shows:
 
-- `tldr`: the answer (or each question's verdict as a bullet when the answer is empty), `★` plus Claude's pick for each decision, and the links.
+- `tldr`: the answer (or each question's verdict as a bullet when the answer is empty), `★ **<choice>**` plus Claude's pick for each decision (just `★` plus the pick when the choice is empty), and the links.
 - `exec`: the answer, a numbered line per question (your question in bold, then the verdict), each decision with its options and the picked one starred, `⚠` caveats, the next step, and the links.
 - `full`: `exec` plus each question's `why` and `details`, and the reply's `details`.
 
@@ -97,7 +97,7 @@ Drawn at `tldr`:
 ```
 Partly: checkout is fixed, shipping waits on QA.
 
-★ Ship, the risk is low.
+★ **Ship Friday?** Ship, the risk is low.
 
 * Report: /tmp/r.html · file:///tmp/r.html
 

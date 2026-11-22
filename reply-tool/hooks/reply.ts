@@ -441,7 +441,7 @@ export function renderReply(raw: unknown, view: ReplyView): string {
   if (view === 'tldr') {
     if (answer !== '') blocks.push(answer)
     else if (questions.length > 0) blocks.push(questions.map(q => `- ${q.verdict.trim()}`).join('\n'))
-    if (decisions.length > 0) blocks.push(decisions.map(d => `★ ${d.pick.trim()}`).join(BREAK))
+    if (decisions.length > 0) blocks.push(decisions.map(d => (d.choice.trim() === '' ? `★ ${d.pick.trim()}` : `★ **${d.choice.trim()}** ${d.pick.trim()}`)).join(BREAK))
     linkBlock()
     return blocks.join('\n\n')
   }
