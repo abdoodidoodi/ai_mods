@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { WORKED_EXAMPLE, renderReply, validateReply } from '../hooks/reply'
+import { CLOSING_MARK, CLOSING_MATCHER, WORKED_EXAMPLE, closingText, renderReply, validateReply } from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
@@ -171,7 +171,8 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
   expect(accepted.result).toBe('delivered')
   // After delivery the next step is answered by the mod with an invisible text: no request, no nudge.
   const closing = await draw(1)
-  expect(closing.answer).toBe('\u200b')
+  expect(closing.answer).toBe(closingText(bad, 'full'))
+  expect(closing.answer.startsWith(CLOSING_MARK)).toBe(true)
   expect(closing.toolUses).toEqual([])
   expect(engine.steps).toBe(1)
 
@@ -328,4 +329,18 @@ test('a respond call while reply-tool is off is turned away for good', async ($,
   // Once on, the same call is delivered.
   await run($, 'reply', 'exec')
   expect((await respond($, { answer: 'Yes.' })).result).toBe('delivered')
+})
+
+test('the closing text is the marked reply at the view, and only a marked or bare closing text is hidden', () => {
+  for (const view of ['tldr', 'exec', 'full'] as const) {
+    const text = closingText(SAMPLE, view)
+    expect(text).toBe(CLOSING_MARK + renderReply(SAMPLE, view).trim())
+    expect(CLOSING_MATCHER.test(text)).toBe(true)
+  }
+  expect(closingText(SAMPLE, 'tldr')).not.toBe(closingText(SAMPLE, 'full'))
+  // An empty reply falls back to the bare invisible text.
+  expect(closingText({}, 'exec')).toBe('​')
+  expect(CLOSING_MATCHER.test('​')).toBe(true)
+  expect(CLOSING_MATCHER.test('hi')).toBe(false)
+  expect(CLOSING_MATCHER.test('hello ​⁠​')).toBe(false)
 })

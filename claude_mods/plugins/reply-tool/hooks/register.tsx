@@ -2,11 +2,13 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
+  CLOSING_MATCHER,
   CONTRACT,
   CONTRACT_ID,
   MAX_REJECTIONS,
   USAGE,
   addStats,
+  closingText,
   formatStats,
   parseSetting,
   readStats,
@@ -53,8 +55,8 @@ function bump($: EngineInterface, delta: Partial<Stats>): Promise<unknown> {
 }
 
 // One turn of one loop (the main loop, or a subagent's), as far as respond is concerned.
-type Book = { rejections: number; calls: number; isDelivered: boolean; deliveredIssues: number; isClosed: boolean }
-const fresh = (): Book => ({ rejections: 0, calls: 0, isDelivered: false, deliveredIssues: 0, isClosed: false })
+type Book = { input: unknown; rejections: number; calls: number; isDelivered: boolean; deliveredIssues: number; isClosed: boolean }
+const fresh = (): Book => ({ input: undefined, rejections: 0, calls: 0, isDelivered: false, deliveredIssues: 0, isClosed: false })
 const loopOf = (agentId: string | undefined): string => agentId ?? 'main'
 
 // What the closing step says: nothing a person can see.
@@ -150,6 +152,7 @@ export const register: Register = on => {
     }
     // Clean, or the turn's rejections are spent: accepted; the drawing and the counters note the issues.
     book.isDelivered = true
+    book.input = input
     book.isClosed = false
     book.deliveredIssues = issues.length
     return { result: 'delivered' }
@@ -157,17 +160,19 @@ export const register: Register = on => {
 
   // After `delivered` the turn is over, but the model's next request would only come back with
   // thinking and no text, and the loop answers that with a "no visible output" nudge that makes the
-  // model write the reply again. So that one step is answered here, with a zero-width space as its
-  // text (an answer the loop accepts as visible) and no request is sent; the row is drawn as nothing.
+  // model write the reply again. So that one step is answered here, with no request: its text is the
+  // reply as markdown behind an invisible marker, ordinary assistant text that Desktop and mobile draw
+  // (they have no ToolUse row for respond). The terminal hides it, its ToolUse row draws the reply.
   on('turn.step', async function* ($, e, next) {
     // Only the main loop is ever closed: a subagent's steps go to the model as they are.
     if (e.agentId !== undefined) return yield* next(e)
     const book = books.get(loopOf(e.agentId))
     if (book === undefined || !book.isDelivered || book.isClosed) return yield* next(e)
     book.isClosed = true
-    yield { kind: 'text', index: 0, text: CLOSING }
+    const closing = closingText(book.input, viewOf(await read($, mode)))
+    yield { kind: 'text', index: 0, text: closing }
     yield { kind: 'stop', stopReason: 'end_turn', usage: null }
-    return { turnId: e.turnId, index: e.index, answer: CLOSING, toolUses: [], stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: closing, toolUses: [], stopReason: 'end_turn', usage: null }
   })
 
   on('turn.complete', async ($, e, next) => {

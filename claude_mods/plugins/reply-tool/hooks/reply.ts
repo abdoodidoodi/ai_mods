@@ -629,3 +629,19 @@ export function toolSpec(isEnabled: boolean) {
     isDeferred: !isEnabled,
   }
 }
+
+// The closing step's text. After `respond` is delivered the turn ends with an ordinary assistant
+// message holding the reply as markdown, so Desktop and mobile (which fold the respond call into an
+// activity group and draw no ToolUse row of their own) still show it. A zero-width marker leads it so
+// the terminal, whose ToolUse row already draws the reply, can hide this copy.
+export const CLOSING_MARK = '​⁠​'
+// A bare zero-width space is what 0.1.1 wrote; transcripts may still hold it.
+export const CLOSING_EMPTY = '​'
+
+export function closingText(raw: unknown, view: ReplyView): string {
+  const markdown = renderReply(raw, view).trim()
+  return markdown === '' ? CLOSING_EMPTY : `${CLOSING_MARK}${markdown}`
+}
+
+// Matches an AssistantMessage that is a closing step: marked, or the old bare invisible text.
+export const CLOSING_MATCHER = /^(?:​⁠​|[​\s]*​[​\s]*$)/
