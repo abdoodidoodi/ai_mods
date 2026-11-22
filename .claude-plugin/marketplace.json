@@ -1,0 +1,11 @@
+{
+  "name": "ai_mods",
+  "owner": { "name": "abdoodidoodi" },
+  "plugins": [
+    {
+      "name": "reply-tool",
+      "source": "./claude_mods/plugins/reply-tool",
+      "description": "Structured replies through a respond tool, drawn at the detail level you pick with /reply."
+    }
+  ]
+}
