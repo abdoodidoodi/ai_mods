@@ -1,13 +1,13 @@
 # reply-tool
 
-A Claude Code mod that makes Claude deliver every reply through a `respond` tool whose input is a structured reply: a bottom line, one verdict per question you asked, the decisions you need to make with Claude's pick, caveats, a next step, links, and details. The tool checks each reply against a few rules and sends back the exact issues when it breaks one, and the mod draws the tool row as the formatted reply, at the level of detail you choose.
+A Claude Code mod that makes Claude deliver every reply through a `respond` tool whose input is a structured reply: a headline (the shortest possible answer) with an optional summary, one verdict per question you asked, the decisions you need to make with Claude's pick, caveats, a next step, links, and details. The tool checks each reply against a few rules and sends back the exact issues when it breaks one, and the mod draws the tool row as the formatted reply, at the level of detail you choose.
 
 ## Why
 
 Long replies bury the answer. With reply-tool the answer comes first, and you decide how much of the rest you read:
 
-- `tldr`: the bold headline, one line per question (the question in bold, then the verdict), one line per decision (the choice in bold, then Claude's pick), and the links.
-- `exec`: tldr plus each question's reason headline (one bold line), the options of each decision, the caveats, the section headings and top-level bullets of the details, the next step, and a `Links` heading.
+- `tldr`: the bold headline (the shortest possible answer, at most 8 words), one line per question (the question in bold, then the verdict), one line per decision (the choice in bold, then Claude's pick), and the links.
+- `exec`: tldr plus the summary (1 to 2 sentences of context, plain text directly under the headline), each question's reason headline (one bold line), the options of each decision, the caveats, the section headings and top-level bullets of the details, the next step, and a `Links` heading.
 - `full`: exec plus the rest of each question's reason bullet (the `details`: prose after the headline, lists nested under it) and the nested bullets of the details sections.
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
@@ -54,11 +54,12 @@ reply-tool is off at the start of every session. Two commands:
 
 What each view shows. The three views are one outline cut at three depths: every line of `tldr` is in `exec`, and every line of `exec` is in `full`, in the same order and styled the same. Lines only appear or disappear; nothing reorders. The only exception is the `Links` heading, which `tldr` leaves out.
 
-Every view has the same fixed block order: headline, questions, decisions, caveats, details sections, next step, links. Links are always last.
+Every view has the same fixed block order: headline and summary, questions, decisions, caveats, details sections, next step, links. Links are always last.
 
 | Element | tldr | exec adds | full adds |
 | --- | --- | --- | --- |
-| `answer` | bold headline | | |
+| `headline` | bold headline | | |
+| `summary` | | plain text directly under the headline, same block | |
 | each question | `**ask** verdict` | `- **reason headline**` | the same bullet continues `: prose`, with the details' lists nested under it |
 | each decision | `**choice** pick` | the option bullets, recommended first | |
 | caveats | | `⚠ caveat`, one line each | |
@@ -79,7 +80,7 @@ Spacing and emphasis:
 
 Details are written as an outline: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. `exec` shows the headings and top-level bullets (and any paragraph or table); `full` shows everything, including a code block nested under a bullet.
 
-Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
+Replies written before 0.1.9 have an `answer` and no `headline`: the `answer` is drawn as the headline, as it always was (the schema and the contract no longer offer `answer`, and the validator turns a new call that only has one away). Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
 
 There is no footer under a reply.
 
@@ -93,7 +94,8 @@ The same reply, as Claude sends it:
 
 ```json
 {
-  "answer": "Checkout is fixed; one call needed on the release date.",
+  "headline": "Checkout fixed; ship Friday",
+  "summary": "The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.",
   "questions": [
     {
       "ask": "Does checkout still fail on Safari?",
@@ -147,7 +149,7 @@ The same reply, as Claude sends it:
 Drawn at `tldr`:
 
 ```
-**Checkout is fixed; one call needed on the release date.**
+**Checkout fixed; ship Friday**
 
 **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
 
@@ -161,7 +163,8 @@ Drawn at `tldr`:
 Drawn at `exec`:
 
 ```
-**Checkout is fixed; one call needed on the release date.**
+**Checkout fixed; ship Friday**  
+The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
 
 **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
 - **The retry now covers the timeout path**
@@ -191,7 +194,8 @@ Drawn at `exec`:
 Drawn at `full`: `exec` plus the rest of the question's reason bullet and the nested bullets under Canary and Old sessions:
 
 ```
-**Checkout is fixed; one call needed on the release date.**
+**Checkout fixed; ship Friday**  
+The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
 
 **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
 - **The retry now covers the timeout path**: The timeout path was the only one that dropped the session.
@@ -230,11 +234,12 @@ TODO: add screenshots of `/reply tldr`, `/reply exec` and `/reply full` on the s
 
 ## The reply schema
 
-The `respond` tool takes one JSON object. Only `answer` is required.
+The `respond` tool takes one JSON object. Only `headline` is required.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `answer` | string | The bottom line: plain prose, at most 2 sentences. Starts with Yes, No or Partly for a yes/no question. With 2 or more questions it is one sentence that repeats no verdict (and may be empty). |
+| `headline` | string | The shortest possible answer: at most 8 words, no colon, one sentence (`JSON`, or `JSON for config, spaces for code`). For a yes/no question: Yes, No or Partly plus at most a few words. Drawn bold in every view. |
+| `summary` | string | Optional: 1 to 2 sentences of context for the headline. Drawn as plain text directly under it in `exec` and `full`, not in `tldr`. |
 | `questions` | array | One entry per question you asked, in your order, at most 5. Omitted when you asked one question. |
 | `questions[].ask` | string | Your question in your words, at most 12 words. Required. |
 | `questions[].verdict` | string | One sentence: the verdict first, then the number or effect. No ids, paths, URLs or code. Required. |
@@ -251,14 +256,14 @@ The `respond` tool takes one JSON object. Only `answer` is required.
 
 The tool checks, and rejects with the exact issues:
 
-- a missing `answer`, or an empty one with no questions
-- more than 2 sentences in `answer`, more than 1 in a `verdict` or `why`
+- a missing or empty `headline`; a `headline` of more than 8 words, with a colon, or with more than 1 sentence (the message says: shortest possible answer, at most 8 words; move context into summary)
+- more than 2 sentences in `summary`, more than 1 in a `verdict` or `why`
 - a `why` that is a generic label ("Why", "Because", "Reason", "Details", or one ending in a colon) or contains a colon
-- exactly 1 question (it belongs in `answer`), or more than 5
+- exactly 1 question (it belongs in `headline`), or more than 5
 - more than 2 caveats
 - a decision with fewer than 2 options, an option with no valid `stance`, or not exactly one `recommended`
 - a field of the wrong type
-- in the fields you read first (`answer`, `verdict`, `pick`, option `name` and `consequence`, `caveats`, `next`): a bare id (`!123`, `ABC-123`, `ADR-12`), a URL, inline code, or a file path. These belong in `details` or `links`.
+- in the fields you read first (`headline`, `summary`, `verdict`, `pick`, option `name` and `consequence`, `caveats`, `next`): a bare id (`!123`, `ABC-123`, `ADR-12`), a URL, inline code, or a file path. These belong in `details` or `links`.
 
 ## How it works
 

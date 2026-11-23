@@ -4,12 +4,13 @@ import type { Engine } from 'claude-code/testing'
 
 type Mounted = Awaited<ReturnType<Engine['ui']['mount']>>
 
-import { CLOSING_MARK, CLOSING_MATCHER, REPLY_SCHEMA, WORKED_EXAMPLE, boldLabel, closingText, indicatorText, renderReply, validateReply, viewBlocks } from '../hooks/reply'
+import { CLOSING_MARK, CLOSING_MATCHER, CONTRACT, REPLY_SCHEMA, WORKED_EXAMPLE, boldLabel, closingText, indicatorText, renderReply, validateReply, viewBlocks } from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
 const SAMPLE = {
-  answer: 'Checkout is fixed; one call needed on the release date.',
+  headline: 'Checkout fixed; ship Friday',
+  summary: 'The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.',
   questions: [
     {
       ask: 'Does checkout still fail on Safari?',
@@ -45,7 +46,10 @@ const SAMPLE = {
   links: [{ label: 'Test report', path: '/home/me/reports/checkout.html' }],
 }
 
-const HEAD = '**Checkout is fixed; one call needed on the release date.**'
+const HEAD = '**Checkout fixed; ship Friday**'
+const SUMMARY = 'The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.'
+// Headline and summary are one block, no blank line between; the two plain lines are kept apart with a hard break.
+const TOP = HEAD + '  \n' + SUMMARY
 const Q1 = '**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
 const WHY = '- **The retry now covers the timeout path**'
 const Q2 = '**Can we ship Friday?** Yes, if QA signs off by Thursday.'
@@ -61,7 +65,7 @@ const DECISION = [
 const TLDR = [HEAD, Q1, Q2, D1, LINK].join('\n\n')
 
 const EXEC = [
-  HEAD,
+  TOP,
   [Q1, WHY].join('\n'),
   Q2,
   DECISION,
@@ -73,7 +77,7 @@ const EXEC = [
 ].join('\n\n')
 
 const FULL = [
-  HEAD,
+  TOP,
   [
     Q1,
     WHY + ': The timeout path was the only one that dropped the session.',
@@ -121,6 +125,11 @@ test('the views are one outline: every line of tldr is in exec, and of exec in f
   const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(SAMPLE, view)))
   inOrder(tldr, exec)
   inOrder(exec, full)
+  // The summary is the one line the prefix invariant gains: in exec and full, directly under the headline, never in tldr.
+  expect(tldr).not.toContain(SUMMARY)
+  expect(exec.slice(0, 2)).toEqual([HEAD, SUMMARY])
+  expect(full.slice(0, 2)).toEqual([HEAD, SUMMARY])
+  expect(tldr[0]).toBe(HEAD)
   expect(tldr).not.toContain('**Links**')
   expect(exec).toContain('**Links**')
   for (const view of [tldr, exec, full]) expect(view.at(-1)).toBe(LINK)
@@ -150,7 +159,7 @@ test('a bullet of the form Label: text gets a bold label; a time, a URL, a code 
   expect(boldLabel('See `a: b`')).toBe('See `a: b`')
   expect(boldLabel('https://x.test/a: b')).toBe('https://x.test/a: b')
   expect(boldLabel('one two three four five six seven: too long')).toBe('one two three four five six seven: too long')
-  const md = renderReply({ answer: 'A', details: '**S**\n- Rate: 5%\n- Starts 10:00\n  - Inner: note\n\nA plain paragraph: not bolded' }, 'full')
+  const md = renderReply({ headline: 'A', details: '**S**\n- Rate: 5%\n- Starts 10:00\n  - Inner: note\n\nA plain paragraph: not bolded' }, 'full')
   expect(md).toContain('- **Rate**: 5%')
   expect(md).toContain('- Starts 10:00')
   expect(md).toContain('  - **Inner**: note')
@@ -159,23 +168,23 @@ test('a bullet of the form Label: text gets a bold label; a time, a URL, a code 
 
 test('details prune by depth: headings and top-level bullets in exec, nested and fenced-under-bullet material only in full', () => {
   const details = ['# Plan', '- step one', '  - sub step', '  ```', '  code under bullet', '  ```', '- step two', '', 'A paragraph.', '', '| a | b |', '| - | - |'].join('\n')
-  expect(renderReply({ answer: 'A', details }, 'exec')).toBe('**A**\n\n# Plan\n- step one\n- step two\n\nA paragraph.\n\n| a | b |\n| - | - |')
-  const full = renderReply({ answer: 'A', details }, 'full')
+  expect(renderReply({ headline: 'A', details }, 'exec')).toBe('**A**\n\n# Plan\n- step one\n- step two\n\nA paragraph.\n\n| a | b |\n| - | - |')
+  const full = renderReply({ headline: 'A', details }, 'full')
   expect(full).toContain('- step one\n  - sub step\n  ```\n  code under bullet\n  ```\n- step two')
-  expect(renderReply({ answer: 'A', details }, 'tldr')).toBe('**A**')
+  expect(renderReply({ headline: 'A', details }, 'tldr')).toBe('**A**')
 })
 
 test('a headline-less reply, and a bold the model wrote itself', () => {
-  expect(renderReply({ answer: 'One line.' }, 'exec')).toBe('**One line.**')
-  expect(renderReply({ answer: 'Has **already** bold' }, 'exec')).toBe('Has **already** bold')
-  expect(renderReply({ answer: '', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }, 'tldr')).toBe('**Q?** V.\n\n**R?** W.')
+  expect(renderReply({ headline: 'One line.' }, 'exec')).toBe('**One line.**')
+  expect(renderReply({ headline: 'Has **already** bold' }, 'exec')).toBe('Has **already** bold')
+  expect(renderReply({ headline: '', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }, 'tldr')).toBe('**Q?** V.\n\n**R?** W.')
   // The closing text opens with an invisible marker; a bold that starts on punctuation gets a space so it still renders.
-  expect(closingText({ answer: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + ' **"Yes" it is.**')
-  expect(closingText({ answer: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '**Yes it is.**')
+  expect(closingText({ headline: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + ' **"Yes" it is.**')
+  expect(closingText({ headline: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '**Yes it is.**')
 })
 
 test('stance validation: exactly one recommended per decision, a known value on every option, picked no longer accepted', () => {
-  const withOptions = (options: unknown[]) => ({ answer: 'Ok.', decisions: [{ choice: 'Go?', pick: 'Yes.', options }] })
+  const withOptions = (options: unknown[]) => ({ headline: 'Ok.', decisions: [{ choice: 'Go?', pick: 'Yes.', options }] })
   const o = (stance: string) => ({ name: 'A', consequence: 'c.', stance })
   expect(validateReply(withOptions([o('recommended'), o('option'), o('not_recommended')]))).toEqual([])
   expect(validateReply(withOptions([o('option'), o('option')]))).toEqual(['decisions[0] has no option with stance recommended'])
@@ -193,7 +202,7 @@ test('stance validation: exactly one recommended per decision, a known value on 
 
 test('validation flags a bare id and a two-sentence verdict, and passes the worked example', () => {
   const issues = validateReply({
-    answer: 'Yes.',
+    headline: 'Yes.',
     questions: [
       { ask: 'Is it fixed?', verdict: 'Yes, in !441.' },
       { ask: 'Is it fast?', verdict: 'Yes, 2x faster. Ships Monday.' },
@@ -205,10 +214,69 @@ test('validation flags a bare id and a two-sentence verdict, and passes the work
   ])
   expect(validateReply(WORKED_EXAMPLE)).toEqual([])
   expect(renderReply(WORKED_EXAMPLE, 'exec')).toBe(EXEC)
-  expect(validateReply({})).toEqual(['answer is missing'])
+  expect(validateReply({})).toEqual(['headline is missing (headline: shortest possible answer, at most 8 words; move context into summary)'])
 })
 
-const why1 = (question: Record<string, unknown>) => ({ answer: 'A.', questions: [{ ask: 'Q?', verdict: 'V.', ...question }, { ask: 'R?', verdict: 'W.' }] })
+const FIX = 'headline: shortest possible answer, at most 8 words; move context into summary'
+
+test('headline is the shortest possible answer: over 8 words, a colon or a second sentence is rejected, with the fix in the message', () => {
+  expect(validateReply({ headline: 'JSON' })).toEqual([])
+  expect(validateReply({ headline: 'JSON for config, spaces for code' })).toEqual([])
+  expect(validateReply({ headline: 'One two three four five six seven eight' })).toEqual([])
+  expect(validateReply({ headline: 'One two three four five six seven eight nine' })).toEqual([`headline has 9 words (max 8): ${FIX}`])
+  expect(validateReply({ headline: 'JSON: it is strict' })).toEqual([`headline has a colon: ${FIX}`])
+  expect(validateReply({ headline: 'JSON. Spaces.' })).toEqual([`headline has 2 sentences (max 1): ${FIX}`])
+  expect(validateReply({ headline: '   ' })).toEqual([`headline is empty (${FIX})`])
+  expect(validateReply({ headline: 5 })).toEqual(['headline should be a string'])
+  // The old long bottom line is exactly what the owner wants gone from the top.
+  const issues = validateReply({
+    headline: 'For app config, JSON is the safer default because it is strict and parses the same everywhere, while YAML wins only when people edit by hand.',
+  })
+  expect(issues).toHaveLength(1)
+  expect(issues[0]).toContain('words (max 8)')
+  expect(issues[0]).toContain('move context into summary')
+  // A headline carries no id, URL, code or path either.
+  expect(validateReply({ headline: 'Fixed in !441' })).toEqual(['headline has a bare id "!441"'])
+})
+
+test('summary is 1 to 2 sentences of context and optional', () => {
+  expect(validateReply({ headline: 'JSON', summary: 'It is strict. It parses the same everywhere.' })).toEqual([])
+  expect(validateReply({ headline: 'JSON', summary: 'One. Two. Three.' })).toEqual([
+    'summary has 3 sentences (max 2): write 1 to 2 sentences of context; move the rest into details',
+  ])
+  expect(validateReply({ headline: 'JSON', summary: 7 })).toEqual(['summary should be a string'])
+  expect(validateReply({ headline: 'JSON', summary: 'See `a.ts` now.' })).toHaveLength(2)
+})
+
+test('summary is plain text right under the bold headline in exec and full, and absent from tldr', () => {
+  const input = { headline: 'JSON', summary: 'It is strict and parses the same everywhere.' }
+  expect(renderReply(input, 'tldr')).toBe('**JSON**')
+  expect(renderReply(input, 'exec')).toBe('**JSON**  \nIt is strict and parses the same everywhere.')
+  expect(renderReply(input, 'full')).toBe(renderReply(input, 'exec'))
+  expect(closingText(input, 'tldr')).toBe(CLOSING_MARK + '**JSON**')
+  expect(renderReply({ headline: 'JSON', summary: '  ' }, 'exec')).toBe('**JSON**')
+})
+
+test('the contract and the schema lead with headline and summary; answer is gone', () => {
+  const props = REPLY_SCHEMA.properties as Record<string, unknown>
+  expect(Object.keys(props).slice(0, 2)).toEqual(['headline', 'summary'])
+  expect(props.answer).toBeUndefined()
+  expect(REPLY_SCHEMA.required).toEqual(['headline'])
+  expect(CONTRACT).not.toMatch(/"answer"|"answer":/)
+  expect(CONTRACT).toContain('shortest possible answer')
+  expect(CONTRACT).toContain('"headline":"Checkout fixed; ship Friday"')
+  expect(validateReply({ answer: 'Yes.' })).toEqual([`answer is no longer a field: send ${FIX}`])
+})
+
+test('a reply from before 0.1.9 (answer, no headline) still draws its answer as the headline, and a headline wins over a stray answer', () => {
+  const old = { answer: 'Checkout is fixed; one call needed on the release date.', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }
+  for (const view of ['tldr', 'exec', 'full'] as const) {
+    expect(renderReply(old, view)).toBe('**Checkout is fixed; one call needed on the release date.**\n\n**Q?** V.\n\n**R?** W.')
+  }
+  expect(renderReply({ answer: 'Old.', headline: 'New' }, 'exec')).toBe('**New**')
+})
+
+const why1 = (question: Record<string, unknown>) => ({ headline: 'A.', questions: [{ ask: 'Q?', verdict: 'V.', ...question }, { ask: 'R?', verdict: 'W.' }] })
 
 test('why is one line that states the reason: a generic label, a colon or a second sentence is rejected', () => {
   expect(validateReply(why1({ why: 'JSON fails loudly; YAML can change values silently' }))).toEqual([])
@@ -257,10 +325,10 @@ test('links draw as just the label: [label](url), no path text; only an absolute
     '- [Site](https://example.com/a%20b%281%29)',
     '- [Report](file:///tmp/r.html)',
   ].join('\n')
-  expect(renderReply({ answer: 'Done.', links }, 'tldr')).toBe('**Done.**\n\n' + list)
+  expect(renderReply({ headline: 'Done.', links }, 'tldr')).toBe('**Done.**\n\n' + list)
   // exec and full carry a bold Links heading; tldr has none.
-  expect(renderReply({ answer: 'Done.', links }, 'exec')).toBe('**Done.**\n\n**Links**\n' + list)
-  expect(renderReply({ answer: 'Done.', links }, 'tldr')).not.toContain('Links')
+  expect(renderReply({ headline: 'Done.', links }, 'exec')).toBe('**Done.**\n\n**Links**\n' + list)
+  expect(renderReply({ headline: 'Done.', links }, 'tldr')).not.toContain('Links')
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual(['links[0].path should be an absolute path or an http(s) URL'])
 })
 
@@ -271,7 +339,7 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs behind the
     { label: 'C', path: '\\\\srv\\share\\a b.txt' },
   ]
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual([])
-  const out = renderReply({ answer: 'Done.', links }, 'tldr')
+  const out = renderReply({ headline: 'Done.', links }, 'tldr')
   expect(out).toContain('- [A](file:///C:/Users/Me/My%20Report.html)')
   expect(out).toContain('- [B](file:///C:/Users/Me/r%281%29.html)')
   expect(out).toContain('- [C](file://srv/share/a%20b.txt)')
@@ -280,13 +348,13 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs behind the
 })
 
 test('literal backslash-n escapes become real line breaks, except in code spans or when real newlines exist', () => {
-  expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**  \n**b\tc**')
-  expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**  \n**Done**')
-  const full = renderReply({ answer: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
+  expect(renderReply({ headline: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**  \n**b\tc**')
+  expect(renderReply({ headline: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**  \n**Done**')
+  const full = renderReply({ headline: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
   expect(full).toContain('**Q?** V.\n- x\n- y')
   expect(full.endsWith('p  \nq')).toBe(true)
   // A Windows path in a link is never touched.
-  expect(renderReply({ answer: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
+  expect(renderReply({ headline: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
 })
 
 // What the engine's own turn.step and ui.render would answer, counted so a test sees when they are reached.
@@ -308,6 +376,8 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
   const markdown = (await ui.findAll({ type: 'Markdown' })).map(node => node.text).join('\n\n')
   expect(markdown).toContain(HEAD)
+  expect(markdown.includes(SUMMARY)).toBe(view !== 'tldr')
+  if (view !== 'tldr') expect(markdown).toContain(TOP)
   expect(markdown).toContain(D1)
   expect(markdown).not.toContain('file:///')
   expect(markdown).not.toContain('Decision')
@@ -358,7 +428,7 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await run($, 'reply', 'exec')
 
-  const bad = { answer: 'Yes.', questions: [{ ask: 'Done?', verdict: 'Done in !441.' }, { ask: 'Ok?', verdict: 'Yes.' }] }
+  const bad = { headline: 'Yes.', questions: [{ ask: 'Done?', verdict: 'Done in !441.' }, { ask: 'Ok?', verdict: 'Yes.' }] }
   await $.turn.start({ text: 'q', turnId: 't1' })
   for (const round of [1, 2]) {
     const rejected = await respond($, bad)
@@ -387,7 +457,7 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
   // A subagent is left alone: its respond call is turned away, and its next step still goes to the model, unclosed.
   const sub = { turnId: 'ts', agentId: 'sub1' }
   await $.turn.start({ text: 'q', ...sub })
-  const turnedAway = await respond($, { agentId: sub.agentId, answer: 'Yes, it works.' })
+  const turnedAway = await respond($, { agentId: sub.agentId, headline: 'Yes, it works.' })
   expect(turnedAway.deny).toBe(
     'respond is for the main conversation only. You are a subagent: write your report as plain text, in whatever form best serves the agent that spawned you.',
   )
@@ -400,7 +470,7 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
 
   // The next turn starts with two rejections again; a clean reply passes first time.
   await $.turn.start({ text: 'q', turnId: 't2' })
-  const clean = await respond($, { answer: 'Yes, it works.' })
+  const clean = await respond($, { headline: 'Yes, it works.' })
   expect(clean.result).toBe('delivered')
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
 
@@ -440,7 +510,7 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
     // A rejected call is an errored row in the transcript (live and on a redraw or resume): it draws nothing, not the
     // reply and not a `respond rejected` line. A call still running draws nothing either.
     for (const state of [{ isErrored: true }, { isRunning: true }]) {
-      const hidden = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: { ...ROW, ...state, input: { answer: 'Done in !441.' } }, requestId: 'tu2' })
+      const hidden = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: { ...ROW, ...state, input: { headline: 'Done in !441.' } }, requestId: 'tu2' })
       expect(await hidden.drawn()).toMatchObject({ type: 'Box', props: { display: 'none' } })
       expect(await hidden.find({ type: 'Text' })).toBeUndefined()
       expect(await hidden.find({ type: 'Markdown' })).toBeUndefined()
@@ -527,7 +597,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   expect(registered).toHaveLength(2)
   expect((await run($, 'reply', 'full')).text).toBe('reply-tool is already set to full.')
   // An accepted reply that still has issues draws just the reply: no footer, no issue list.
-  const flagged = { ...row, input: { answer: 'Done in !441.' } }
+  const flagged = { ...row, input: { headline: 'Done in !441.' } }
   const issues = await $.ui.mount({ plugin: 'reply-tool', surface: 'terminal', component: 'ToolUse', props: flagged, requestId: 'tu4' })
   expect((await issues.find({ type: 'Markdown' }))?.text).toBe('**Done in !441.**')
   expect(await issues.find({ type: 'Text' })).toBeUndefined()
@@ -554,13 +624,13 @@ test('a respond call while reply-tool is off is turned away for good', async ($,
   harness(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
-  expect((await respond($, { answer: 'Yes.' })).deny).toBe(
+  expect((await respond($, { headline: 'Yes.' })).deny).toBe(
     'respond is disabled (reply-tool is off). Do not call it again; write your reply as normal markdown.',
   )
 
   // Once on, the same call is delivered.
   await run($, 'reply', 'exec')
-  expect((await respond($, { answer: 'Yes.' })).result).toBe('delivered')
+  expect((await respond($, { headline: 'Yes.' })).result).toBe('delivered')
 })
 
 test('the closing text is the marked reply at the view, and only a marked or bare closing text is hidden', () => {

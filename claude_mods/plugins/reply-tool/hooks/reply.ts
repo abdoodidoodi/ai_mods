@@ -27,12 +27,17 @@ export const viewOf = (setting: Setting): ReplyView => (setting === 'off' ? 'ful
 export const REPLY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['answer'],
+  required: ['headline'],
   properties: {
-    answer: {
+    headline: {
       type: 'string',
       description:
-        'Bottom line, plain prose, at most 2 sentences. Start with Yes/No/Partly when the user asked a yes/no question. With 2+ questions: one sentence of overall bottom line that does not repeat any verdict (may be empty).',
+        'The shortest possible answer, at most 8 words, no colon, one sentence, e.g. "JSON" or "JSON for config, spaces for code". For a yes/no question: "Yes", "No" or "Partly" plus at most a few words. Drawn bold in every view. Context goes in summary.',
+    },
+    summary: {
+      type: 'string',
+      description:
+        'Optional: 1 to 2 sentences of context for the headline (the reason or the nuance). Drawn as plain text directly under the headline in exec and full, not in tldr.',
     },
     questions: {
       type: 'array',
@@ -133,6 +138,9 @@ export type ReplyQuestion = { ask: string; verdict: string; why: string; details
 export type ReplyLink = { label: string; path: string }
 export type Reply = {
   /** undefined when the field was absent or not a string. */
+  headline: string | undefined
+  summary: string
+  /** What replies before 0.1.9 carry in place of `headline`: drawn as the headline when there is none; never accepted by the validator. */
   answer: string | undefined
   questions: ReplyQuestion[]
   decisions: ReplyDecision[]
@@ -253,6 +261,8 @@ export function normalizeReply(raw: unknown): { reply: Reply; problems: string[]
   })
 
   const reply: Reply = {
+    headline: text('headline', root.headline),
+    summary: text('summary', root.summary) ?? '',
     answer: text('answer', root.answer),
     questions,
     decisions,
@@ -338,16 +348,28 @@ export function validateReply(raw: unknown): string[] {
     if (count > max) issues.push(`${field} has ${count} sentences (max ${max})`)
   }
 
-  const { answer } = reply
-  if (answer === undefined) {
-    if (!problems.includes('answer should be a string')) issues.push('answer is missing')
+  const { headline, answer } = reply
+  const fix = 'headline: shortest possible answer, at most 8 words; move context into summary'
+  if (headline === undefined) {
+    if (answer !== undefined) issues.push(`answer is no longer a field: send ${fix}`)
+    else if (!problems.includes('headline should be a string')) issues.push(`headline is missing (${fix})`)
   } else {
-    if (answer.trim() === '' && reply.questions.length === 0) issues.push('answer is empty and there are no questions')
-    sentences('answer', answer, 2)
-    issues.push(...scanField('answer', answer))
+    const flat = oneLine(headline)
+    const words = flat === '' ? 0 : flat.split(' ').length
+    if (flat === '') issues.push(`headline is empty (${fix})`)
+    if (words > 8) issues.push(`headline has ${words} words (max 8): ${fix}`)
+    if (flat.includes(':')) issues.push(`headline has a colon: ${fix}`)
+    const count = countSentences(flat)
+    if (count > 1) issues.push(`headline has ${count} sentences (max 1): ${fix}`)
+    issues.push(...scanField('headline', headline))
+  }
+  if (reply.summary.trim() !== '') {
+    const count = countSentences(oneLine(reply.summary))
+    if (count > 2) issues.push(`summary has ${count} sentences (max 2): write 1 to 2 sentences of context; move the rest into details`)
+    issues.push(...scanField('summary', reply.summary))
   }
 
-  if (reply.questions.length === 1) issues.push('questions has 1 entry (omit it and answer in "answer")')
+  if (reply.questions.length === 1) issues.push('questions has 1 entry (omit it and answer in "headline")')
   if (reply.questions.length > 5) issues.push(`questions has ${reply.questions.length} entries (max 5; group by theme)`)
   reply.questions.forEach((question, i) => {
     sentences(`questions[${i}].verdict`, question.verdict, 1)
@@ -469,6 +491,8 @@ export function unescapeBreaks(text: string): string {
 function unescapeReply(reply: Reply): Reply {
   const u = unescapeBreaks
   return {
+    headline: reply.headline === undefined ? undefined : u(reply.headline),
+    summary: u(reply.summary),
     answer: reply.answer === undefined ? undefined : u(reply.answer),
     questions: reply.questions.map(q => ({ ask: u(q.ask), verdict: u(q.verdict), why: u(q.why), details: u(q.details) })),
     decisions: reply.decisions.map(d => ({
@@ -648,8 +672,12 @@ export function buildBlocks(raw: unknown): Block[] {
   const md = (depth: Depth, text: string): Line => ({ kind: 'md', depth, text })
   const blocks: Block[] = []
 
-  const answer = (reply.answer ?? '').split('\n').filter(row => row.trim() !== '')
-  if (answer.length > 0) blocks.push(answer.map(row => md(1, boldLine(row.trimEnd()))))
+  // The headline is bold in every view; the summary is plain text right under it in the same block, exec and full only.
+  // A reply from before 0.1.9 has no headline: its `answer` is drawn as the headline.
+  const head = (reply.headline ?? reply.answer ?? '').split('\n').filter(row => row.trim() !== '')
+  const top: Block = head.map(row => md(1, boldLine(row.trimEnd())))
+  if (oneLine(reply.summary) !== '') top.push(md(2, oneLine(reply.summary)))
+  if (top.length > 0) blocks.push(top)
 
   for (const q of reply.questions) {
     if (q.ask.trim() === '' && q.verdict.trim() === '') continue
@@ -802,7 +830,8 @@ export function formatStats(stats: Stats, setting: Setting): string {
 
 /** One short worked example; it passes its own validator. */
 export const WORKED_EXAMPLE = {
-  answer: 'Checkout is fixed; one call needed on the release date.',
+  headline: 'Checkout fixed; ship Friday',
+  summary: 'The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.',
   questions: [
     {
       ask: 'Does checkout still fail on Safari?',
@@ -833,7 +862,7 @@ export const WORKED_EXAMPLE = {
 export const CONTRACT_ID = 'reply-tool:contract'
 
 const RULES = [
-  '1. Answer first: the bottom line comes before anything else.',
+  '1. Lead with `headline`: the shortest possible answer, at most 8 words, no colon, one sentence (for example "JSON", or "JSON for config, spaces for code"; for a yes/no question "Yes", "No" or "Partly" plus at most a few words). Nuance and reasons go in `summary` (1 to 2 sentences, shown in exec and full), never in the headline.',
   '2. One block per question THE USER asked, in their order, labelled with their question.',
   '3. Each block is a verdict plus 1-2 sentences, with the number kept.',
   '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict. The `why` of a question is one line that states the reason itself (a headline of at most about 14 words, no colon), never a label like "Why"; its `details` are the rest of that bullet, shown in full only: prose after the headline, lists nested under it.',
