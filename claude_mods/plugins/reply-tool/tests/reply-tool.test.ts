@@ -48,6 +48,7 @@ const SAMPLE = {
     },
   ],
   caveats: ['Safari 16 was not tested.'],
+  status: '**Waiting on you**\n- **QA sign-off**: needed by Thursday\n  - Regression suite is green',
   details: [
     '**Rollout**',
     '- **Canary**: 5% on Thursday',
@@ -73,6 +74,10 @@ const D1 = '◇ **Ship Friday or wait a week?** Ship Friday'
 const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
 const NEXT = '→ Want me to draft the QA sign-off request?'
 const CAVEAT = '⚠ Safari 16 was not tested.'
+const STATUS_HEAD = '▸ **Waiting on you**'
+const STATUS_BULLET = '- **QA sign-off**: needed by Thursday'
+const STATUS_SUB = '  - Regression suite is green'
+const STATUS = [STATUS_HEAD, STATUS_BULLET].join('\n')
 const DECISION = [
   D1,
   '- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.',
@@ -83,11 +88,12 @@ const DECISION = [
 // tldr: the shortest status. headline, the decision line, the next step, the links; no Links heading.
 const TLDR = [HEAD, D1, NEXT, LINK].join('\n\n')
 
-// exec: tldr plus the summary, the verdicts, the options, the caveat and the Links heading.
-const EXEC = [TOP, Q1, Q2, DECISION, CAVEAT, NEXT, '↗ **Links**\n' + LINK].join('\n\n')
+// exec: tldr plus the status, the verdicts with their reason headline, the options, the caveat and the Links heading.
+const EXEC = [HEAD, STATUS, Q1 + '\n' + WHY, Q2, DECISION, CAVEAT, NEXT, '↗ **Links**\n' + LINK].join('\n\n')
 
 const FULL = [
   TOP,
+  [STATUS_HEAD, STATUS_BULLET, STATUS_SUB].join('\n'),
   [
     Q1,
     WHY + ': The timeout path was the only one that dropped the session.',
@@ -137,7 +143,8 @@ test('the views are one outline: every line of tldr is in exec, and of exec in f
   inOrder(exec, full)
   // The summary is the one line the prefix invariant gains: in exec and full, directly under the headline, never in tldr.
   expect(tldr).not.toContain(SUMMARY)
-  expect(exec.slice(0, 2)).toEqual([HEAD, SUMMARY])
+  expect(exec).not.toContain(SUMMARY)
+  expect(exec.slice(0, 2)).toEqual([HEAD, STATUS_HEAD])
   expect(full.slice(0, 2)).toEqual([HEAD, SUMMARY])
   expect(tldr[0]).toBe(HEAD)
   expect(tldr).not.toContain('↗ **Links**')
@@ -146,8 +153,10 @@ test('the views are one outline: every line of tldr is in exec, and of exec in f
   // tldr is clipped hard: headline, the decision, the next step, the links. No verdicts, options, caveats or reasons.
   expect(tldr).toEqual([HEAD, D1, NEXT, LINK])
   expect(viewBlocks(SAMPLE, 'tldr')).toHaveLength(4)
-  // exec is clipped too: verdicts and options yes, reasons, evidence and details no.
-  expect(exec).not.toContain(WHY)
+  // exec is clipped too: status, verdicts, reasons and options yes; summary, evidence, nested status and details no.
+  expect(exec).toContain(WHY)
+  expect(exec).toContain(STATUS_BULLET)
+  expect(exec).not.toContain(STATUS_SUB)
   expect(exec.join('\n')).not.toContain('Rollout')
 })
 
@@ -238,23 +247,26 @@ test('a child never shows before its parent: it takes the parent level when that
 test('every block opens with its section icon, in both sets; the emoji set swaps cleanly', () => {
   const expected = (set: 'glyph' | 'emoji') => {
     const i = ICONS[set]
-    return [i.answer, i.question, i.question, i.decision, i.caveat, i.details, i.details, i.next, i.links]
+    return [i.answer, i.status, i.question, i.question, i.decision, i.caveat, i.details, i.details, i.next, i.links]
   }
   for (const set of ['glyph', 'emoji'] as const) {
     const blocks = viewBlocks(SAMPLE, 'full', set)
-    expect(blocks).toHaveLength(9)
+    expect(blocks).toHaveLength(10)
     blocks.forEach((block, i) => {
       const first = block[0]
       expect(first && lineMarkdown(first).startsWith(expected(set)[i] ?? '?'), `${set} block ${i}`).toBe(true)
     })
   }
-  // The summary line gets no icon; neither do the tldr links (no heading there).
-  expect(renderReply(SAMPLE, 'exec').split('\n')[1]).toBe(SUMMARY)
+  // The summary line gets no icon and is full only; neither do the tldr links (no heading there).
+  expect(renderReply(SAMPLE, 'full').split('\n')[1]).toBe(SUMMARY)
+  expect(renderReply(SAMPLE, 'exec')).not.toContain(SUMMARY)
+  expect(renderReply(SAMPLE, 'exec').split('\n')[1]).toBe('')
+  expect(renderReply(SAMPLE, 'exec').split('\n')[2]).toBe('▸ **Waiting on you**')
   expect(renderReply(SAMPLE, 'tldr')).not.toContain('↗')
   // The emoji set draws the same reply with only the icons replaced.
   for (const view of ['tldr', 'exec', 'full'] as const) {
     let md = renderReply(SAMPLE, view, 'emoji')
-    expect(md).not.toMatch(/[●◆◇≡↗→]/)
+    expect(md).not.toMatch(/[●◆◇≡▸↗→]/)
     for (const key of Object.keys(ICONS.glyph) as (keyof typeof ICONS.glyph)[]) md = md.split(ICONS.emoji[key]).join(ICONS.glyph[key])
     expect(md).toBe(renderReply(SAMPLE, view, 'glyph'))
   }
@@ -406,11 +418,11 @@ test('summary is 1 to 2 sentences of context and optional', () => {
   expect(validateReply({ headline: 'JSON', summary: 'See `a.ts` now.' })).toHaveLength(2)
 })
 
-test('summary is plain text right under the bold headline in exec and full, and absent from tldr', () => {
+test('summary is plain text right under the bold headline in full only, and absent from tldr and exec', () => {
   const input = { headline: 'JSON', summary: 'It is strict and parses the same everywhere.' }
   expect(renderReply(input, 'tldr')).toBe('● **JSON**')
-  expect(renderReply(input, 'exec')).toBe('● **JSON**  \nIt is strict and parses the same everywhere.')
-  expect(renderReply(input, 'full')).toBe(renderReply(input, 'exec'))
+  expect(renderReply(input, 'exec')).toBe('● **JSON**')
+  expect(renderReply(input, 'full')).toBe('● **JSON**  \nIt is strict and parses the same everywhere.')
   expect(closingText(input, 'tldr')).toBe(CLOSING_MARK + '● **JSON**')
   expect(renderReply({ headline: 'JSON', summary: '  ' }, 'exec')).toBe('● **JSON**')
 })
@@ -452,8 +464,9 @@ test('details without a why are the questions own bullets in full only; with a w
   expect(renderReply(noWhy, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n\n◆ **R?** W.')
   expect(renderReply(noWhy, 'full')).toBe('● **A.**\n\n◆ **Q?** V.\n- Some prose.\n- **Pick**: JSON\n  - nested\n- plain\n\n◆ **R?** W.')
   const both = why1({ why: 'JSON fails loudly', details: 'No coercion traps.\n- **Pick JSON when**: machines write it\n- Pick YAML when: humans edit it' })
-  // The reason is full only now: exec keeps the verdict alone.
-  expect(renderReply(both, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n\n◆ **R?** W.')
+  // The reason headline is exec now (reason 2); its prose and the evidence stay full.
+  expect(renderReply(both, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n- **JSON fails loudly**\n\n◆ **R?** W.')
+  expect(renderReply(both, 'tldr')).toBe('● **A.**')
   expect(renderReply(both, 'full')).toBe(
     '● **A.**\n\n◆ **Q?** V.\n- **JSON fails loudly**: No coercion traps.\n  - **Pick JSON when**: machines write it\n  - **Pick YAML when**: humans edit it\n\n◆ **R?** W.',
   )
@@ -461,7 +474,8 @@ test('details without a why are the questions own bullets in full only; with a w
 
 test('an old multi-sentence why draws its first sentence as the headline, the rest then the old details in full only', () => {
   const old = why1({ why: 'The retry covers the timeout path. It was the only gap, e.g. 5 files.', details: '- Fix: wrapper' })
-  expect(renderReply(old, 'exec')).not.toContain('The retry')
+  expect(renderReply(old, 'exec')).toContain('- **The retry covers the timeout path**\n')
+  expect(renderReply(old, 'exec')).not.toContain('It was the only gap')
   expect(renderReply(old, 'full')).toContain('◆ **Q?** V.\n- **The retry covers the timeout path**: It was')
   expect(renderReply(old, 'full')).toContain('- **The retry covers the timeout path**: It was the only gap, e.g. 5 files.\n  - **Fix**: wrapper')
 })
@@ -536,14 +550,16 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
   const markdown = (await ui.findAll({ type: 'Markdown' })).map(node => node.text).join('\n\n')
   expect(markdown).toContain(HEAD)
-  expect(markdown.includes(SUMMARY)).toBe(view !== 'tldr')
-  if (view !== 'tldr') expect(markdown).toContain(TOP)
+  expect(markdown.includes(SUMMARY)).toBe(view === 'full')
+  if (view === 'full') expect(markdown).toContain(TOP)
+  expect(markdown.includes(STATUS_BULLET)).toBe(view !== 'tldr')
+  expect(markdown.includes(STATUS_SUB)).toBe(view === 'full')
   expect(markdown).toContain(D1)
   expect(markdown).not.toContain('file:///')
   expect(markdown).not.toContain('Decision')
   expect(JSON.stringify(await ui.drawn())).not.toContain('cyan')
   expect(markdown.includes(Q1)).toBe(view !== 'tldr')
-  expect(markdown.includes(WHY)).toBe(view === 'full')
+  expect(markdown.includes(WHY)).toBe(view !== 'tldr')
   expect(markdown.includes(WHY + ': The timeout path was')).toBe(view === 'full')
   expect(markdown).not.toMatch(/\*\*(Why|Details)\*\*/)
   expect(markdown.includes('  - Watch the error dashboard')).toBe(view === 'full')
@@ -811,4 +827,33 @@ test('the closing text is the marked reply at the view, and only a marked or bar
 test('the indicator reads <setting> while on and nothing while off', () => {
   expect(indicatorText('off')).toBeUndefined()
   for (const mode of ['tldr', 'exec', 'full'] as const) expect(indicatorText(mode)).toBe(mode)
+})
+
+test('status is a second outline right after the headline: exec shows headings and top-level bullets, full the nested ones', () => {
+  const status = '**Active today**\n- **Build**: running\n  - step one\n\n**Waiting on you**\n- **Approval**: needed'
+  const input = { headline: 'A', summary: 'S.', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }], status, details: '**Shipped**\n- **Old**: done' }
+  expect(renderReply(input, 'tldr')).toBe('● **A**')
+  expect(renderReply(input, 'exec')).toBe(
+    '● **A**\n\n▸ **Active today**\n- **Build**: running\n\n▸ **Waiting on you**\n- **Approval**: needed\n\n◆ **Q?** V.\n\n◆ **R?** W.',
+  )
+  const full = renderReply(input, 'full')
+  expect(full).toBe(
+    '● **A**  \nS.\n\n▸ **Active today**\n- **Build**: running\n  - step one\n\n▸ **Waiting on you**\n- **Approval**: needed\n\n◆ **Q?** V.\n\n◆ **R?** W.\n\n≡ **Shipped**\n- **Old**: done',
+  )
+  expect(renderReply(input, 'full', 'emoji')).toContain('📍 **Active today**')
+  expect(LEVELS.statusSection).toBe(2)
+  expect(LEVELS.statusBullet).toBe(2)
+  expect(LEVELS.statusSub).toBe(3)
+  expect(ICONS.glyph.status).toBe('▸')
+  expect(ICONS.emoji.status).toBe('📍')
+  expect(validateReply(input)).toEqual([])
+  expect(validateReply({ headline: 'A', status: 5 })).toEqual(['status should be a string'])
+})
+
+test('the level table: summary is full, the reason is exec, the evidence is full', () => {
+  expect(LEVELS.summary).toBe(3)
+  expect(LEVELS.reason).toBe(2)
+  expect(LEVELS.evidence).toBe(3)
+  expect(LEVELS.verdict).toBe(2)
+  expect(LEVELS.decision).toBe(1)
 })

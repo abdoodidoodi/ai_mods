@@ -9,8 +9,8 @@ Long replies bury the answer. With reply-tool the answer comes first, and you de
 Three views, for three readers:
 
 - `tldr` is for someone who wants fully autonomous execution without knowing how or why: only the shortest status updates towards progress. The bold headline (at most 8 words), the decisions (the choice in bold, then Claude's pick: the recommended option in at most 8 words), the next step, and the links. No verdicts, no options.
-- `exec` is for someone who also wants a say in the decisions, with very few whys to build each decision in their head. tldr plus the summary (1 to 2 sentences under the headline), one verdict line per question, each decision's options with their one-line consequences, the caveats, and a `Links` heading. No reasons, evidence or details.
-- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus each question's reason headline and its details, and the whole `details` outline.
+- `exec` is for someone who also wants a say in the decisions, with very few whys to build each decision in their head. tldr plus the `status` outline (where things stand, what waits on you: its headings and top-level bullets), one verdict line per question with its one-line reason, each decision's options with their one-line consequences, the caveats, and a `Links` heading. No summary, evidence, nested status bullets or details.
+- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus the summary (1 to 2 sentences under the headline), each question's `details` (the evidence), the nested `status` bullets, and the whole `details` outline (background, how-to, history).
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
 
@@ -56,16 +56,16 @@ reply-tool is off at the start of every session. Two commands:
 
 What each view shows. The three views are one outline cut at three levels: every line of `tldr` is in `exec`, and every line of `exec` is in `full`, in the same order and styled the same. Lines only appear or disappear; nothing reorders.
 
-Every view has the same fixed block order: headline and summary, questions, decisions, caveats, details sections, next step, links. Links are always last.
+Every view has the same fixed block order: headline and summary, status sections, questions, decisions, caveats, details sections, next step, links. Links are always last.
 
 Every drawn line is one unit of a type, and one exported table, `LEVELS` in `hooks/reply.ts`, says which view first shows each type (1 = tldr, 2 = exec, 3 = full). Moving a type between views is a one-line edit there.
 
 | Unit | What it is | Level |
 | --- | --- | --- |
 | `headline` | the bold shortest answer | 1 (tldr) |
-| `summary` | the line under the headline | 2 (exec) |
+| `summary` | the line under the headline | 3 (full) |
 | `verdict` | a question's `**ask** verdict` line | 2 (exec) |
-| `reason` | a question's one-line bold reason bullet | 3 (full) |
+| `reason` | a question's one-line bold reason bullet | 2 (exec) |
 | `evidence` | a question's `details`, nested under the reason | 3 (full) |
 | `decision` | the `**choice** pick` line | 1 (tldr) |
 | `option` | `- [Recommended] **Name**: consequence` | 2 (exec) |
@@ -73,28 +73,31 @@ Every drawn line is one unit of a type, and one exported table, `LEVELS` in `hoo
 | `section` | a `details` outline heading | 3 (full) |
 | `bullet` | a `details` top-level bullet or paragraph | 3 (full) |
 | `subbullet` | a nested `details` bullet | 3 (full) |
+| `statusSection` | a `status` outline heading | 2 (exec) |
+| `statusBullet` | a `status` top-level bullet or paragraph | 2 (exec) |
+| `statusSub` | a nested `status` bullet | 3 (full) |
 | `next` | `→ next` | 1 (tldr) |
 | `link` | each link | 1 (tldr) |
 | `linksHeading` | the bold heading above the links | 2 (exec) |
 
-A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (headline, then summary; verdict, then reason, then evidence; decision, then option; section, then bullet, then subbullet).
+A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (headline, then summary; verdict, then reason, then evidence; decision, then option; section, then bullet, then subbullet; status section, then status bullet, then status sub-bullet).
 
-Every view has the same fixed block order: headline and summary, questions, decisions, caveats, details sections, next step, links. Links are always last.
+Every view has the same fixed block order: headline and summary, status sections, questions, decisions, caveats, details sections, next step, links. Links are always last.
 
-Section icons. The first line of each block opens with an icon, so the eye can find a section: `●` the answer (before the bold headline; the summary under it has none), `◆` each question, `◇` each decision, `⚠` the caveats, `≡` each details section, `→` the next step, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 💬 🔀 ⚠️ 📋 ➡️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A `#` heading in the details is drawn as a bold line behind its icon; a details block that starts with a bullet takes the icon after the list marker, and one that starts with a table or code block gets none. The icons are part of the markdown, so the terminal and Desktop draw the same.
+Section icons. The first line of each block opens with an icon, so the eye can find a section: `●` the answer (before the bold headline; the summary under it has none), `◆` each question, `◇` each decision, `⚠` the caveats, `▸` each status section, `≡` each details section, `→` the next step, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 💬 🔀 ⚠️ 📍 📋 ➡️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A `#` heading in the status or details is drawn as a bold line behind its icon; a details block that starts with a bullet takes the icon after the list marker, and one that starts with a table or code block gets none. The icons are part of the markdown, so the terminal and Desktop draw the same.
 
 Spacing and emphasis:
 
 - **One blank line between blocks,** none inside one: each question, each decision, the caveats, each details section, the next step and the links are separate blocks, and lists are tight.
 - **Bold before the colon.** Every bullet of the form `Label: text` (label up to 6 words, no backticks or URLs) has a bold label; the mod adds the bold when the model did not. A colon in a time such as `10:00`, or one not followed by a space, does not count.
-- **No generic labels.** A reason is never drawn as `**Why**:` or `**Details**:`. The `why` is a one-line headline that states the reason itself, and the `details` are the rest of that bullet. A question with `details` but no `why` draws the details in full as the question's own bullets. A `why` written before 0.1.8 with several sentences draws its first sentence as the headline and the rest as full-only detail, ahead of the old `details`.
+- **No generic labels.** A reason is never drawn as `**Why**:` or `**Details**:`. The `why` is a one-line headline that states the reason itself, and the `details` are the rest of that bullet. The `why` shows from exec on, its `details` in full only. A question with `details` but no `why` draws the details in full as the question's own bullets. A `why` written before 0.1.8 with several sentences draws its first sentence as the headline and the rest as full-only detail, ahead of the old `details`.
 - **Options.** `- [Recommended] **Name**: consequence` for the recommended option, always first, then the others in their given order as `- **Name**: consequence`.
 - **Option colors (terminal only).** `[Recommended]` and the name of the recommended option are green, `option` names blue, `not_recommended` names red. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. Each decision has exactly one `recommended` option.
 - **Links show just their label,** as a clickable link: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown. They are always the last block.
 - **A blank line above every reply** in the terminal, between your prompt and the answer.
 - **No decision label, bar or blockquote:** a decision is a bold choice and the pick, followed by its options.
 
-Details are written as an outline: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. They are drawn in `full`, including a code block nested under a bullet.
+`status` and `details` are written as outlines: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. `status` is where things stand and what is waiting on you (in a progress update: active work and items waiting on you); it is drawn right after the headline, its headings and top-level bullets from `exec`, its nested bullets in `full`. `details` is background, how-to, history and evidence (in a progress update: shipped history and parked work); it is drawn in `full` only, including a code block nested under a bullet. Add a decision only when you must choose; never restate the headline as one.
 
 Replies written before 0.1.9 have an `answer` and no `headline`: the `answer` is drawn as the headline, as it always was (the schema and the contract no longer offer `answer`, and the validator turns a new call that only has one away). Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
 
@@ -116,9 +119,8 @@ The same reply, as Claude sends it:
     {
       "ask": "Does checkout still fail on Safari?",
       "verdict": "No, the failure rate fell from 4% to 0.1%.",
-      "why": "The retry now covers the timeout path",
-      "details": "The timeout path was the only one that dropped the session.
-- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441"
+      "why": "The retry now covers the timeout path.",
+      "details": "- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441"
     },
     {
       "ask": "Can we ship Friday?",
@@ -151,6 +153,7 @@ The same reply, as Claude sends it:
   "caveats": [
     "Safari 16 was not tested."
   ],
+  "status": "**Waiting on you**\n- **QA sign-off**: needed by Thursday\n  - Regression suite is green",
   "details": "**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00\n\n**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours",
   "next": "Want me to draft the QA sign-off request?",
   "links": [
@@ -177,10 +180,13 @@ Drawn at `tldr`:
 Drawn at `exec`:
 
 ```
-● **Checkout fixed; ship Friday**  
-The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
+● **Checkout fixed; ship Friday**
+
+▸ **Waiting on you**
+- **QA sign-off**: needed by Thursday
 
 ◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
+- **The retry now covers the timeout path**
 
 ◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.
 
@@ -197,11 +203,15 @@ The retry covers the timeout path, so Safari no longer fails. Only the release d
 - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `full`: `exec` plus the question's reason bullet with its details, and the details sections:
+Drawn at `full`: `exec` plus the summary, the evidence under each reason, the nested status bullets and the details sections:
 
 ```
 ● **Checkout fixed; ship Friday**  
 The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
+
+▸ **Waiting on you**
+- **QA sign-off**: needed by Thursday
+  - Regression suite is green
 
 ◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
 - **The retry now covers the timeout path**
@@ -245,11 +255,11 @@ The `respond` tool takes one JSON object. Only `headline` is required.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `headline` | string | The shortest possible answer: at most 8 words, no colon, one sentence (`JSON`, or `JSON for config, spaces for code`). For a yes/no question: Yes, No or Partly plus at most a few words. Drawn bold in every view. |
-| `summary` | string | Optional: 1 to 2 sentences of context for the headline. Drawn as plain text directly under it in `exec` and `full`, not in `tldr`. |
+| `summary` | string | Optional: 1 to 2 sentences of context for the headline. Drawn as plain text directly under it in `full` only. |
 | `questions` | array | One entry per question you asked, in your order, at most 5. Omitted when you asked one question. |
 | `questions[].ask` | string | Your question in your words, at most 12 words. Required. |
 | `questions[].verdict` | string | One sentence: the verdict first, then the number or effect. No ids, paths, URLs or code. Required. |
-| `questions[].why` | string | Optional: ONE line that states the reason itself, written as a headline (about 14 words at most, one sentence, no colon; never a label such as "Why"). Drawn bold as the question's bullet in `full`. |
+| `questions[].why` | string | Optional: ONE line that states the reason itself, written as a headline (about 14 words at most, one sentence, no colon; never a label such as "Why"). Drawn bold as the question's bullet in `exec` and `full`. |
 | `questions[].details` | string | Optional, `full` only: the rest of the `why` bullet. Leading prose follows the headline as `: prose`; any list nests under the bullet. Without a `why`, drawn as the question's own bullets. |
 | `decisions` | array | Only when you must choose. One entry per choice. |
 | `decisions[].choice` | string | The decision, phrased as a question. Required. |
@@ -258,7 +268,8 @@ The `respond` tool takes one JSON object. Only `headline` is required.
 | `caveats` | array of strings | At most 2, one clause each, only when one changes a decision. |
 | `next` | string | A question or offer that reads on its own. |
 | `links` | array | Deliverables you open: `label` and `path` (an absolute path or an http(s) URL). Always drawn as the label alone, as a clickable link to the path or URL. |
-| `details` | string | Optional outline for everything else: bold section headings, top-level bullets as `**Label**: one line`, deeper material as nested bullets. Drawn in `full` only. |
+| `status` | string | Optional outline of where things stand and what is waiting on you (a progress update: active work, items waiting on you). Same format as `details`. Drawn right after the headline: headings and top-level bullets in `exec` and `full`, nested bullets in `full` only. |
+| `details` | string | Optional outline for background, how-to, history and evidence (shipped history, parked work): bold section headings, top-level bullets as `**Label**: one line`, deeper material as nested bullets. Drawn in `full` only. |
 
 The tool checks, and rejects with the exact issues:
 

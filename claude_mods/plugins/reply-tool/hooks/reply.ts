@@ -39,7 +39,7 @@ export const REPLY_SCHEMA = {
     summary: {
       type: 'string',
       description:
-        'Optional: 1 to 2 sentences of context for the headline (the reason or the nuance). Drawn as plain text directly under the headline in exec and full, not in tldr.',
+        'Optional: 1 to 2 sentences of context for the headline (the reason or the nuance). Drawn as plain text directly under the headline in full only.',
     },
     questions: {
       type: 'array',
@@ -58,7 +58,7 @@ export const REPLY_SCHEMA = {
           why: {
             type: 'string',
             description:
-              'Optional: ONE line that states the reason itself, written as a headline (at most about 14 words, one sentence, no colon). Never a label such as "Why" or "Reason". Drawn bold as the bullet under the question, in full only.',
+              'Optional: ONE line that states the reason itself, written as a headline (at most about 14 words, one sentence, no colon). Never a label such as "Why" or "Reason". Drawn bold as the bullet under the question, in exec and full.',
           },
           details: {
             type: 'string',
@@ -125,10 +125,15 @@ export const REPLY_SCHEMA = {
         },
       },
     },
+    status: {
+      type: 'string',
+      description:
+        'Optional outline of where things stand and what is waiting on the user (a progress update: active work, items waiting on the user). Same format as details: bold section headings (`**Active today**`), each followed by top-level bullets written `- **Label**: one line`; nested bullets under them are drawn in full only. Drawn right after the headline: headings and top-level bullets in exec and full.',
+    },
     details: {
       type: 'string',
       description:
-        'Optional outline for everything else: bold section headings (`**Rollout**`), each followed by top-level bullets written `- **Label**: one line`, and deeper material as nested bullets indented under them. Drawn in full only.',
+        'Optional outline for background, how-to, history and evidence (shipped history, parked work, rollout plans): bold section headings (`**Rollout**`), each followed by top-level bullets written `- **Label**: one line`, and deeper material as nested bullets indented under them. Drawn in full only. Where things stand and what waits on the user goes in status instead.',
     },
   },
 } as const
@@ -153,6 +158,7 @@ export type Reply = {
   caveats: string[]
   next: string
   links: ReplyLink[]
+  status: string
   details: string
 }
 
@@ -275,6 +281,7 @@ export function normalizeReply(raw: unknown): { reply: Reply; problems: string[]
     caveats,
     next: text('next', root.next) ?? '',
     links,
+    status: text('status', root.status) ?? '',
     details: text('details', root.details) ?? '',
   }
   return { reply, problems }
@@ -515,6 +522,7 @@ function unescapeReply(reply: Reply): Reply {
     caveats: reply.caveats.map(u),
     next: u(reply.next),
     links: reply.links,
+    status: u(reply.status),
     details: u(reply.details),
   }
 }
@@ -541,6 +549,9 @@ export type Unit =
   | 'section'
   | 'bullet'
   | 'subbullet'
+  | 'statusSection'
+  | 'statusBullet'
+  | 'statusSub'
   | 'next'
   | 'link'
   | 'linksHeading'
@@ -549,13 +560,13 @@ export type Unit =
  * The one table: the first view that shows each unit type (1 = tldr, 2 = exec, 3 = full). Relabelling a type is a
  * one-line edit here. A child never shows before its parent: when a parent's level is higher than its child's, the
  * child takes the parent's (headline > summary; verdict > reason > evidence; decision > option; section > bullet >
- * subbullet). `linksHeading` is the bold heading above the links, which tldr leaves out.
+ * subbullet; statusSection > statusBullet > statusSub). `linksHeading` is the bold heading above the links, which tldr leaves out.
  */
 export const LEVELS: Record<Unit, Depth> = {
   headline: 1, // bold shortest answer
-  summary: 2, // the line under the headline
+  summary: 3, // the line under the headline
   verdict: 2, // a question's `**ask** verdict` line
-  reason: 3, // a question's one-line bold reason bullet
+  reason: 2, // a question's one-line bold reason bullet
   evidence: 3, // a question's `details`, nested under the reason
   decision: 1, // the `**choice** pick` line
   option: 2, // `- [Recommended] **Name**: consequence`
@@ -563,6 +574,9 @@ export const LEVELS: Record<Unit, Depth> = {
   section: 3, // a `details` outline heading
   bullet: 3, // a `details` top-level bullet or paragraph
   subbullet: 3, // a nested `details` bullet
+  statusSection: 2, // a `status` outline heading
+  statusBullet: 2, // a `status` top-level bullet or paragraph
+  statusSub: 3, // a nested `status` bullet
   next: 1, // `→ ...`
   link: 1, // each link
   linksHeading: 2,
@@ -570,8 +584,8 @@ export const LEVELS: Record<Unit, Depth> = {
 
 /** The icon that opens the first line of each kind of block, in two sets. */
 export const ICONS = {
-  glyph: { answer: '●', question: '◆', decision: '◇', caveat: '⚠', details: '≡', next: '→', links: '↗' },
-  emoji: { answer: '🎯', question: '💬', decision: '🔀', caveat: '⚠️', details: '📋', next: '➡️', links: '🔗' },
+  glyph: { answer: '●', question: '◆', decision: '◇', caveat: '⚠', details: '≡', status: '▸', next: '→', links: '↗' },
+  emoji: { answer: '🎯', question: '💬', decision: '🔀', caveat: '⚠️', details: '📋', status: '📍', next: '➡️', links: '🔗' },
 } as const
 export type IconSet = keyof typeof ICONS
 /** The set in use: glyphs, which every terminal font draws. */
@@ -623,17 +637,20 @@ const opensFence = (line: string): boolean => {
  * under a bullet, with a code block nested there, is a `subbullet`. Under a heading, a line's parent is the section.
  * Blank lines are dropped (lists are tight); a change of kind starts a new block.
  */
-export function parseOutline(text: string): Block[] {
+export function parseOutline(
+  text: string,
+  units: { section: Unit; bullet: Unit; subbullet: Unit } = { section: 'section', bullet: 'bullet', subbullet: 'subbullet' },
+): Block[] {
   const blocks: Block[] = []
   let block: Block | undefined
   let kind = ''
   let afterBlank = false
   let isInFence = false
   let hasHeading = false
-  let fenceUnit: Unit = 'bullet'
+  let fenceUnit: Unit = units.bullet
   const via = (unit: Unit): Unit[] | undefined => {
-    const up: Unit[] = hasHeading && unit !== 'section' ? ['section'] : []
-    if (unit === 'subbullet') up.push('bullet')
+    const up: Unit[] = hasHeading && unit !== units.section ? [units.section] : []
+    if (unit === units.subbullet) up.push(units.bullet)
     return up.length === 0 ? undefined : up
   }
   const make = (unit: Unit, text: string, isCode?: boolean): Line => {
@@ -675,7 +692,7 @@ export function parseOutline(text: string): Block[] {
       kind = k
     }
     afterBlank = false
-    const unit: Unit = isNested ? 'subbullet' : k === 'heading' ? 'section' : 'bullet'
+    const unit: Unit = isNested ? units.subbullet : k === 'heading' ? units.section : units.bullet
     block?.push(make(unit, isFence ? line : boldBullet(line), isFence || undefined))
     if (isFence && opensFence(line)) {
       isInFence = true
@@ -783,6 +800,14 @@ export function buildBlocks(raw: unknown, icons: IconSet = ICON_SET): Block[] {
   const top: Block = head.map((row, i) => md('headline', i === 0 ? `${icon.answer} ${boldLine(row.trimEnd())}` : boldLine(row.trimEnd())))
   if (oneLine(reply.summary) !== '') top.push(md('summary', oneLine(reply.summary), ['headline']))
   if (top.length > 0) blocks.push(top)
+
+  if (reply.status.trim() !== '') {
+    for (const block of parseOutline(reply.status, { section: 'statusSection', bullet: 'statusBullet', subbullet: 'statusSub' })) {
+      const first = block[0]
+      if (first !== undefined && first.kind === 'md') first.text = withIcon(first.text, icon.status)
+      blocks.push(block)
+    }
+  }
 
   for (const q of reply.questions) {
     if (q.ask.trim() === '' && q.verdict.trim() === '') continue
@@ -966,6 +991,7 @@ export const WORKED_EXAMPLE = {
     },
   ],
   caveats: ['Safari 16 was not tested.'],
+  status: '**Waiting on you**\n- **QA sign-off**: needed by Thursday\n  - Regression suite is green',
   details:
     '**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00\n\n**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours',
   next: 'Want me to draft the QA sign-off request?',
@@ -975,12 +1001,12 @@ export const WORKED_EXAMPLE = {
 export const CONTRACT_ID = 'reply-tool:contract'
 
 const RULES = [
-  '1. Lead with `headline`: the shortest possible answer, at most 8 words, no colon, one sentence (for example "JSON", or "JSON for config, spaces for code"; for a yes/no question "Yes", "No" or "Partly" plus at most a few words). Nuance and reasons go in `summary` (1 to 2 sentences, shown in exec and full), never in the headline. The views have three readers: tldr wants the shortest status and runs on trust (headline, decisions, next, links); exec also takes part in decisions (adds the summary, verdicts, options, caveats) and needs only the few words that build a decision; full is for working on one problem by hand and gets every detail.',
+  '1. Lead with `headline`: the shortest possible answer, at most 8 words, no colon, one sentence (for example "JSON", or "JSON for config, spaces for code"; for a yes/no question "Yes", "No" or "Partly" plus at most a few words). Nuance and reasons go in `summary` (1 to 2 sentences, shown in full only), never in the headline. The views have three readers: tldr wants the shortest status and runs on trust (headline, decisions, next, links); exec also takes part in decisions (adds the status, each verdict with its one-line reason, options, caveats) and needs only the few words that build a decision; full is for working on one problem by hand and adds the summary, evidence and details.',
   '2. One block per question THE USER asked, in their order, labelled with their question.',
   '3. Each block is a verdict plus 1-2 sentences, with the number kept.',
-  '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict. The `why` of a question is one line that states the reason itself (a headline of at most about 14 words, no colon), never a label like "Why"; it and its `details` (prose after the headline, lists nested under it) are shown in full only, so the verdict must stand without them.',
-  '5. Decisions are numbered calls. `pick` is the recommended option in at most 8 words, with no reason ("Ship Friday"); the reason lives in the options\' consequences. A caveat appears only when it changes a decision.',
-  '6. `details` is an outline: bold section headings, top-level bullets as `**Label**: one line`, and deeper material as nested bullets. It is drawn in full only.',
+  '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict. The `why` of a question is one line that states the reason itself (a headline of at most about 14 words, no colon), never a label like "Why"; the `why` is shown in exec and full, its `details` (prose after the headline, lists nested under it) in full only, so the verdict and reason must stand without the details.',
+  '5. Decisions are numbered calls. `pick` is the recommended option in at most 8 words, with no reason ("Ship Friday"); the reason lives in the options\' consequences. Add a decision only when the user must choose; never restate the headline as a decision. A caveat appears only when it changes a decision.',
+  '6. `status` and `details` are outlines: bold section headings, top-level bullets as `**Label**: one line`, and deeper material as nested bullets. `status` holds where things stand and what is waiting on the user (in a progress update: active work and items waiting on the user); it is drawn right after the headline, its headings and top-level bullets in exec and full, its nested bullets in full only. `details` holds background, how-to, history and evidence (in a progress update: shipped history and parked work); it is drawn in full only.',
   '7. Every decision option has a stance: recommended (your pick, exactly one, drawn green), option (a normal alternative, blue) or not_recommended (listed for completeness, not advised, red).',
 ]
 
