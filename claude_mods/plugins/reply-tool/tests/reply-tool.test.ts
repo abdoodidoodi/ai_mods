@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { CLOSING_MARK, CLOSING_MATCHER, WORKED_EXAMPLE, closingText, renderReply, validateReply } from '../hooks/reply'
+import { CLOSING_MARK, CLOSING_MATCHER, WORKED_EXAMPLE, closingText, indicatorText, renderReply, validateReply } from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
@@ -35,34 +35,52 @@ const SAMPLE = {
 
 const LINK = '* Report: `/tmp/r.html` · [file:///tmp/r.html](file:///tmp/r.html)'
 
-test('a sample reply renders as tldr, exec and full', () => {
-  expect(renderReply(SAMPLE, 'tldr')).toBe(
-    ['Partly: checkout is fixed, shipping waits on QA.', '★ **Ship Friday?** Ship, the risk is low.', LINK].join('\n\n'),
-  )
+const TLDR = [
+  '**Partly: checkout is fixed, shipping waits on QA.**',
+  '★ **Ship Friday?** Ship, the risk is low.',
+  LINK,
+].join('\n\n')
 
-  const exec = renderReply(SAMPLE, 'exec')
-  expect(exec).toBe(
-    [
-      'Partly: checkout is fixed, shipping waits on QA.',
-      '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
-      '**Ship Friday?** ★ Ship, the risk is low.\n- ★ Ship: 5 days sooner.\n- Wait: One more regression pass.',
-      '⚠ Safari 16 is untested.',
-      'Want me to draft the QA request?',
-      LINK,
-    ].join('\n\n'),
-  )
+const EXEC = [
+  '**Partly: checkout is fixed, shipping waits on QA.**',
+  '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
+  '**Ship Friday?** ★ Ship, the risk is low.\n\n- ★ Ship: 5 days sooner.\n- Wait: One more regression pass.',
+  '⚠ Safari 16 is untested.',
+  '→ Want me to draft the QA request?',
+  LINK,
+].join('\n\n')
 
-  expect(exec).not.toContain('The retry covers timeouts.')
-  expect(exec).not.toContain('Fix is in MR')
+const FULL = [
+  '**Partly: checkout is fixed, shipping waits on QA.**',
+  '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n\n   The retry covers timeouts.\n\n   Fix is in MR !441.\n\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
+  '**Ship Friday?** ★ Ship, the risk is low.\n\n- ★ Ship: 5 days sooner.\n- Wait: One more regression pass.',
+  '⚠ Safari 16 is untested.',
+  '→ Want me to draft the QA request?',
+  LINK,
+  'Full log attached.',
+].join('\n\n')
 
-  const full = renderReply(SAMPLE, 'full')
-  expect(full).toContain('failures fell from 4% to 0.1%. The retry covers timeouts.\n\n   Fix is in MR !441.')
-  expect(full.endsWith(`${LINK}\n\nFull log attached.`)).toBe(true)
+test('a sample reply renders as tldr, exec and full: bold headline, a blank line between blocks, no view footer', () => {
+  expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
+  expect(renderReply(SAMPLE, 'exec')).toBe(EXEC)
+  expect(renderReply(SAMPLE, 'full')).toBe(FULL)
+  for (const view of ['tldr', 'exec', 'full'] as const) {
+    expect(renderReply(SAMPLE, view)).not.toMatch(/\/reply|exec ·|tldr ·|full ·/)
+  }
 
   // An empty answer falls back to the verdicts as bullets as tldr.
   expect(renderReply({ ...SAMPLE, answer: '', decisions: [], links: [] }, 'tldr')).toBe(
     '- No, failures fell from 4% to 0.1%.\n- Yes, if QA signs off Thursday.',
   )
+})
+
+test('bold never spans a line break, keeps list markers, and leaves a line the model already bolded', () => {
+  expect(renderReply({ answer: 'One line.' }, 'exec')).toBe('**One line.**')
+  expect(renderReply({ answer: 'Top\n\n- item one\n  - nested' }, 'exec')).toBe('**Top**\n\n- **item one**\n  - **nested**')
+  expect(renderReply({ answer: 'Has **already** bold' }, 'exec')).toBe('Has **already** bold')
+  // The closing text opens with an invisible marker; a bold that starts on punctuation gets a space so it still renders.
+  expect(closingText({ answer: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + ' **"Yes" it is.**')
+  expect(closingText({ answer: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '**Yes it is.**')
 })
 
 test('tldr draws each decision as star, bold choice, pick, and falls back when the choice is empty', () => {
@@ -72,7 +90,7 @@ test('tldr draws each decision as star, bold choice, pick, and falls back when t
   expect(tldr).toContain('★ **Ship Friday?** Ship, the risk is low.')
   expect(tldr).toContain('★ **Notify users?** Yes, a short note.')
   expect(renderReply({ ...SAMPLE, answer: 'A', decisions: [{ ...first, choice: '' }], links: [] }, 'tldr')).toBe(
-    'A\n\n★ Ship, the risk is low.',
+    '**A**\n\n★ Ship, the risk is low.',
   )
 })
 
@@ -100,7 +118,7 @@ test('a link label renders as text, and only an absolute path or an http(s) URL 
   ]
   expect(renderReply({ answer: 'Done.', links }, 'tldr')).toBe(
     [
-      'Done.',
+      '**Done.**',
       [
         '* \\[Docs\\]\\(https://evil.example\\): `javascript:alert(1)`',
         '* Site: [https://example.com/a%20b%281%29](https://example.com/a%20b%281%29)',
@@ -127,10 +145,10 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs', () => {
 
 test('literal backslash-n escapes become real line breaks, except in code spans or when real newlines exist', () => {
   const answer = 'wmux (your app)\\n- Built by Codex:\\n  - sessions survive restarts;'
-  expect(renderReply({ answer }, 'full')).toBe('wmux (your app)\n- Built by Codex:\n  - sessions survive restarts;')
-  expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('a\nb\tc')
-  expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('Run `printf "a\\nb"`\nDone')
-  expect(renderReply({ answer: 'real\nbreak and literal \\n stay' }, 'full')).toBe('real\nbreak and literal \\n stay')
+  expect(renderReply({ answer }, 'full')).toBe('**wmux (your app)**\n- **Built by Codex:**\n  - **sessions survive restarts;**')
+  expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**\n**b\tc**')
+  expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**\n**Done**')
+  expect(renderReply({ answer: 'real\nbreak and literal \\n stay' }, 'full')).toBe('**real**\n**break and literal \\n stay**')
   const full = renderReply({ answer: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
   expect(full).toContain('   x\n   y')
   expect(full.endsWith('p\nq')).toBe(true)
@@ -141,6 +159,8 @@ test('literal backslash-n escapes become real line breaks, except in code spans 
 // What the engine's own turn.step and ui.render would answer, counted so a test sees when they are reached.
 const engine = { steps: 0 }
 const registered: { isDeferred: boolean | undefined; description: string }[] = []
+// Every `$.ui.status` call, in order: the bottom-bar indicator.
+const statuses: (string | undefined)[] = []
 
 const run = ($: Engine, command: string, args = '') =>
   $.command.run({ command, args } as Parameters<typeof $.command.run>[0])
@@ -167,6 +187,7 @@ const harness = (on: On, isStoreMocked = true) => {
     return { value: { tool: RESPOND } }
   })
   on('ui.toast', () => ({ value: undefined }))
+  on('ui.status', (_, e) => (statuses.push(e.text), { value: undefined }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
@@ -236,7 +257,7 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
   expect(stats.text).toContain('rejections: 2')
 })
 
-test('the respond row draws the reply in full while reply-tool is off, a rejected call one dim line, and the result nothing', async ($, on) => {
+test('the respond row draws the reply in full while reply-tool is off with no footer, a rejected or running call nothing, and the result nothing', async ($, on) => {
   harness(on)
   const ROW = {
     tool_use_id: 'tu1',
@@ -249,13 +270,22 @@ test('the respond row draws the reply in full while reply-tool is off, a rejecte
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const reply = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: ROW, requestId: 'tu1' })
     expect((await reply.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
-    expect((await reply.find({ type: 'Text', text: /^full · \/reply tldr\|exec\|full$/ }))?.text).toBe('full · /reply tldr|exec|full')
+    expect(await reply.find({ type: 'Text', text: /\/reply|full ·/ })).toBeUndefined()
     await reply.unmount()
 
-    const bad = { ...ROW, isErrored: true, input: { answer: 'Done in !441.' } }
-    const rejected = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: bad, requestId: 'tu2' })
-    expect((await rejected.find({ type: 'Text' }))?.text).toBe('respond rejected: 1 issue(s)')
-    await rejected.unmount()
+    // A rejected call is an errored row in the transcript (live and on a redraw or resume): it draws nothing, not the
+    // reply and not a `respond rejected` line. A call still running draws nothing either.
+    for (const state of [{ isErrored: true }, { isRunning: true }]) {
+      const hidden = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: { ...ROW, ...state, input: { answer: 'Done in !441.' } }, requestId: 'tu2' })
+      expect(await hidden.drawn()).toMatchObject({ type: 'Box', props: { display: 'none' } })
+      expect(await hidden.find({ type: 'Text' })).toBeUndefined()
+      expect(await hidden.find({ type: 'Markdown' })).toBeUndefined()
+      await hidden.unmount()
+    }
+    // ctrl+o on a rejected call still shows the engine's own row, so the raw call stays inspectable.
+    const inspected = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: { ...ROW, isErrored: true, isExpanded: true }, requestId: 'tu5' })
+    expect((await inspected.find({ type: 'Text' }))?.text).toBe('engine')
+    await inspected.unmount()
 
     // ctrl+o: the engine's own row, so the raw call stays inspectable.
     const raw = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: { ...ROW, isExpanded: true }, requestId: 'tu3' })
@@ -311,39 +341,47 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
 
   const row = { tool_use_id: 'tu1', tool: RESPOND, input: SAMPLE, isRunning: false, isErrored: false, isInterrupted: false }
   const ui = await $.ui.mount({ plugin: 'reply-tool', surface: 'terminal', component: 'ToolUse', props: row, requestId: 'tu1' })
-  const footer = async () => (await ui.find({ type: 'Text', text: /\/reply/ }))?.text
+  // No view footer under a reply, whatever the setting; the setting shows in the bottom-bar indicator instead.
+  const footer = async () => (await ui.find({ type: 'Text', text: /\/reply|·/ }))?.text
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'exec'))
-  expect(await footer()).toBe('exec · /reply off|tldr|exec|full')
+  expect(await footer()).toBeUndefined()
+  expect(statuses.at(-1)).toBe('reply: exec')
 
   expect((await run($, 'reply', 'tldr')).text).toContain('tldr')
   await ui.redraw()
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'tldr'))
-  expect(await footer()).toBe('tldr · /reply off|tldr|exec|full')
+  expect(await footer()).toBeUndefined()
+  expect(statuses.at(-1)).toBe('reply: tldr')
   expect(registered).toHaveLength(2)
 
   // full while on: the drawing only (the tool stays as registered), everything drawn, and an ON mod's footer, which offers off.
   expect((await run($, 'reply', 'full')).text).toBe('reply-tool now draws replies as full.')
   await ui.redraw()
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
-  expect(await footer()).toBe('full · /reply off|tldr|exec|full')
+  expect(await footer()).toBeUndefined()
+  expect(statuses.at(-1)).toBe('reply: full')
   expect(registered).toHaveLength(2)
   expect((await run($, 'reply', 'full')).text).toBe('reply-tool is already set to full.')
+  // An accepted reply that still has issues draws just the reply: no footer, no issue list.
   const flagged = { ...row, input: { answer: 'Done in !441.' } }
   const issues = await $.ui.mount({ plugin: 'reply-tool', surface: 'terminal', component: 'ToolUse', props: flagged, requestId: 'tu4' })
-  expect(await issues.find({ type: 'Text', text: 'full · /reply off|tldr|exec|full · off-pattern: 1 issue(s)' })).toBeDefined()
-  expect(await issues.find({ type: 'Text', text: '  - answer has a bare id "!441"' })).toBeDefined()
+  expect((await issues.find({ type: 'Markdown' }))?.text).toBe('**Done in !441.**')
+  expect(await issues.find({ type: 'Text' })).toBeUndefined()
   await issues.unmount()
 
   expect((await run($, 'reply', 'off')).text).toContain('reply-tool is OFF')
   expect(registered.at(-1)?.isDeferred).toBe(true)
   await ui.redraw()
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
-  expect(await footer()).toBe('full · /reply tldr|exec|full')
+  expect(await footer()).toBeUndefined()
+  // Off: the indicator is cleared.
+  expect(statuses.at(-1)).toBeUndefined()
   await ui.unmount()
   expect(writes).toEqual([])
 
   // Turning it on from off needs nothing else: full turns it on like tldr and exec.
   expect((await run($, 'reply', 'full')).text).toContain('reply-tool is ON (full)')
+  expect(statuses.at(-1)).toBe('reply: full')
   expect(registered.at(-1)?.isDeferred).toBe(false)
   expect((await run($, 'reply_stats')).text).toContain('is set to full')
 })
@@ -373,4 +411,9 @@ test('the closing text is the marked reply at the view, and only a marked or bar
   expect(CLOSING_MATCHER.test('​')).toBe(true)
   expect(CLOSING_MATCHER.test('hi')).toBe(false)
   expect(CLOSING_MATCHER.test('hello ​⁠​')).toBe(false)
+})
+
+test('the indicator reads reply: <setting> while on and nothing while off', () => {
+  expect(indicatorText('off')).toBeUndefined()
+  for (const mode of ['tldr', 'exec', 'full'] as const) expect(indicatorText(mode)).toBe('reply: ' + mode)
 })

@@ -55,10 +55,14 @@ reply-tool is off at the start of every session. Two commands:
 What each view shows:
 
 - `tldr`: the answer (or each question's verdict as a bullet when the answer is empty), `★ **<choice>**` plus Claude's pick for each decision (just `★` plus the pick when the choice is empty), and the links.
-- `exec`: the answer, a numbered line per question (your question in bold, then the verdict), each decision with its options and the picked one starred, `⚠` caveats, the next step, and the links.
-- `full`: `exec` plus each question's `why` and `details`, and the reply's `details`.
+- `exec`: the answer, a numbered line per question (your question in bold, then the verdict), each decision (the choice in bold, with Claude's pick) and its options as a list with the picked one starred, `⚠` caveats, the next step on a line of its own starting with `→`, and the links.
+- `full`: `exec` plus each question's `why` and `details` (indented under its number), and the reply's `details` after the links.
 
-A dim footer under each reply names the view and the command that changes it, for example `tldr · /reply off|tldr|exec|full`. If the reply still had validation issues when it was accepted, the footer adds `· off-pattern: <n> issue(s)`, and the `full` view lists them. Press `ctrl+o` on a reply to see the raw `respond` call.
+In every view the bottom line is bold and a blank line separates each block (answer, questions, decisions, caveats, next step, links), so nothing runs into the next. There is no footer under a reply.
+
+While reply-tool is on, a small indicator under the prompt shows the view, for example `reply: exec` (the terminal draws it in the notice area just above `bypass permissions on`, as `⚠ reply-tool: reply: exec`). It is set with `$.ui.status`, the mod's own pinned status line, so it never touches the `statusLine` setting. It changes the moment `/reply` does and is gone while the mod is off. `/reply` still shows a toast when the setting changes.
+
+A `respond` call the validator rejects draws nothing in the terminal: no row and no `respond rejected` line, live or when the transcript is redrawn or resumed. The model still reads the rejection text, and `/reply_stats` still counts it. Only the accepted call is drawn. Press `ctrl+o` on a reply to see the raw `respond` call, rejected ones included.
 
 ### Example
 
@@ -95,37 +99,35 @@ The same reply, as Claude sends it:
 Drawn at `tldr`:
 
 ```
-Partly: checkout is fixed, shipping waits on QA.
+**Partly: checkout is fixed, shipping waits on QA.**
 
 ★ **Ship Friday?** Ship, the risk is low.
 
 * Report: /tmp/r.html · file:///tmp/r.html
-
-tldr · /reply off|tldr|exec|full
 ```
 
 Drawn at `exec`:
 
 ```
-Partly: checkout is fixed, shipping waits on QA.
+**Partly: checkout is fixed, shipping waits on QA.**
 
-1. Does checkout still fail? No, failures fell from 4% to 0.1%.
-2. Can we ship Friday? Yes, if QA signs off Thursday.
+1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.
 
-Ship Friday? ★ Ship, the risk is low.
+2. **Can we ship Friday?** Yes, if QA signs off Thursday.
+
+**Ship Friday?** ★ Ship, the risk is low.
+
 - ★ Ship: 5 days sooner.
 - Wait: One more regression pass.
 
 ⚠ Safari 16 is untested.
 
-Want me to draft the QA request?
+→ Want me to draft the QA request?
 
 * Report: /tmp/r.html · file:///tmp/r.html
-
-exec · /reply off|tldr|exec|full
 ```
 
-The text above is the markdown source; the terminal draws it with bold, lists, and links. At `full`, the first verdict also gains "The retry covers timeouts." and an indented "Fix is in MR !441.", and the reply's `details` come last.
+The text above is the markdown source; the terminal draws it with bold, lists, and links. At `full`, the first verdict also gains "The retry covers timeouts." and "Fix is in MR !441.", each indented under its number, and the reply's `details` come last. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
 
 ## Screenshots
 
@@ -165,8 +167,8 @@ The tool checks, and rejects with the exact issues:
 ## How it works
 
 - **The `respond` tool.** The mod registers it at session start. While reply-tool is off it is deferred and described as inactive (and a call that still comes is turned away). While it is on, the tool is active, and its description holds the reply rules, a worked example, and the delivery rule: end every turn by calling `respond`, and write nothing else after it returns `delivered`. The contract also rides in the tool description, so it reaches the model even where plugins' `prompt.compose` hooks are skipped; where they run, the mod adds the same contract as a system-prompt section.
-- **Validation.** Each call is checked by the rules above. A reply with issues is rejected with a message that lists every issue word for word, and Claude calls `respond` again with the complete reply. Each turn allows 2 rejections; after that the next call is accepted as it is, and the footer notes the issues, so a reply is never lost to a strict rule.
-- **Rendering.** The mod draws the `respond` tool row as the formatted reply, as one markdown string for the current view. The row reads the setting while it draws, so `/reply` redraws past replies at once. The result row (`delivered`) is hidden.
+- **Validation.** Each call is checked by the rules above. A reply with issues is rejected with a message that lists every issue word for word, and Claude calls `respond` again with the complete reply. Each turn allows 2 rejections; after that the next call is accepted as it is, so a reply is never lost to a strict rule (it counts as a reply with issues in `/reply_stats`).
+- **Rendering.** The mod draws the `respond` tool row as the formatted reply, as one markdown string for the current view. The row reads the setting while it draws, so `/reply` redraws past replies at once. The result row (`delivered`) is hidden, and so is a rejected call's row: it ends as an errored tool result in the transcript, which is what the row hook reads, so it stays hidden on redraw and resume.
 - **The closing step.** After `delivered` the turn is over, but the model's next request would come back with no text and the loop would nudge it to write the reply again. The mod answers that one step itself, sending no further request. Its text is the reply rendered as markdown at the current view, behind an invisible zero-width marker.
 - **Outside the terminal.** The Desktop app and the mobile app draw the transcript with their own interface and fold the `respond` call into the collapsed activity group ("Ran 4 commands, used reply-tool"), so the tool row never appears there. The closing step's text is ordinary assistant text, so those apps show the reply under the group. The terminal hides that marked message, because the tool row already draws the reply, so it looks as it always did, with no duplicate. The mod API has no way to show assistant text without putting it in the conversation, so the text is kept.
 - **Subagents are unaffected.** `respond` is for the main conversation only, so a subagent that calls it is told to report in plain text, and its report reaches the agent that spawned it as written.

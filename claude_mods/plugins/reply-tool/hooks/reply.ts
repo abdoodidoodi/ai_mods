@@ -18,6 +18,9 @@ export function parseSetting(args: string | undefined): Setting | undefined {
   return word === 'off' || word === 'tldr' || word === 'exec' || word === 'full' ? word : undefined
 }
 
+/** The bottom-bar indicator: `reply: exec` while on; undefined (which clears it) while off. */
+export const indicatorText = (setting: Setting): string | undefined => (setting === 'off' ? undefined : `reply: ${setting}`)
+
 export const viewOf = (setting: Setting): ReplyView => (setting === 'off' ? 'full' : setting)
 
 // The reply JSON schema (v1).
@@ -421,18 +424,33 @@ function renderLink(link: ReplyLink): string {
   return `${label}: ${codeSpan(path)}`
 }
 
-function renderQuestion(question: ReplyQuestion, index: number, view: ReplyView): string {
-  const ask = question.ask.trim() === '' ? '' : `**${question.ask.trim()}** `
-  const why = view === 'full' && question.why.trim() !== '' ? ` ${question.why.trim()}` : ''
-  const line = `${index + 1}. ${ask}${question.verdict.trim()}${why}`
-  const details = view === 'full' ? question.details.trim() : ''
-  return details === '' ? line : `${line}\n\n${indent(details, 3)}\n`
+/** One line in bold; an empty line, or one that already holds `**`, is left as the model wrote it. */
+function boldLine(line: string): string {
+  const match = /^(\s*(?:[-*+]|\d+[.)])?\s*)(.*?)(\s*)$/.exec(line)
+  if (match === null || match[2] === undefined || match[2] === '' || line.includes('**')) return line
+  return `${match[1] ?? ''}**${match[2]}**${match[3] ?? ''}`
 }
 
+/** The bottom line in bold, line by line, so a multi-line answer stays valid markdown (bold never spans a break). */
+const boldBlock = (text: string): string => text.split('\n').map(boldLine).join('\n')
+
+/**
+ * A numbered question: the ask in bold, then the verdict. In full the why and the details follow, indented under
+ * their number, each as its own paragraph.
+ */
+function renderQuestion(question: ReplyQuestion, index: number, view: ReplyView): string {
+  const ask = question.ask.trim() === '' ? '' : `**${question.ask.trim()}** `
+  const lines = [`${index + 1}. ${ask}${question.verdict.trim()}`]
+  if (view === 'full' && question.why.trim() !== '') lines.push(indent(question.why.trim(), 3))
+  if (view === 'full' && question.details.trim() !== '') lines.push(indent(question.details.trim(), 3))
+  return lines.join('\n\n')
+}
+
+/** A decision: the choice in bold with the pick, then its options as a list with the picked one starred. */
 function renderDecision(decision: ReplyDecision): string {
   const head = `**${decision.choice.trim()}** ★ ${decision.pick.trim()}`
   const options = decision.options.map(option => `- ${option.picked ? '★ ' : ''}${option.name}: ${option.consequence}`)
-  return [head, ...options].join('\n')
+  return [head, options.join('\n')].join('\n\n')
 }
 
 /**
@@ -478,33 +496,23 @@ export function renderReply(raw: unknown, view: ReplyView): string {
   }
 
   if (view === 'tldr') {
-    if (answer !== '') blocks.push(answer)
+    if (answer !== '') blocks.push(boldBlock(answer))
     else if (questions.length > 0) blocks.push(questions.map(q => `- ${q.verdict.trim()}`).join('\n'))
     if (decisions.length > 0) blocks.push(decisions.map(d => (d.choice.trim() === '' ? `★ ${d.pick.trim()}` : `★ **${d.choice.trim()}** ${d.pick.trim()}`)).join(BREAK))
     linkBlock()
     return blocks.join('\n\n')
   }
 
-  if (answer !== '') blocks.push(answer)
-  if (questions.length > 0) blocks.push(questions.map((q, i) => renderQuestion(q, i, view)).join('\n'))
+  if (answer !== '') blocks.push(boldBlock(answer))
+  // A blank line between questions makes the list loose, so each one stands apart; the numbering still runs on.
+  if (questions.length > 0) blocks.push(questions.map((q, i) => renderQuestion(q, i, view)).join('\n\n'))
   for (const decision of decisions) blocks.push(renderDecision(decision))
   const caveats = reply.caveats.filter(c => c.trim() !== '')
   if (caveats.length > 0) blocks.push(caveats.map(c => `⚠ ${c.trim()}`).join(BREAK))
-  if (reply.next.trim() !== '') blocks.push(reply.next.trim())
+  if (reply.next.trim() !== '') blocks.push(`→ ${reply.next.trim()}`)
   linkBlock()
   if (view === 'full' && reply.details.trim() !== '') blocks.push(reply.details.trim())
   return blocks.join('\n\n')
-}
-
-/**
- * The dim footer lines under `setting`: the view and the command that changes it, the issue count, and in the full
- * view the issues. The full view of an off mode has no `off` to offer (it is already off); the full setting does.
- */
-export function replyFooter(setting: Setting, issues: readonly string[]): string[] {
-  const off = issues.length > 0 ? ` · off-pattern: ${issues.length} issue(s)` : ''
-  const hint = setting === 'off' ? 'full · /reply tldr|exec|full' : `${setting} · /reply off|tldr|exec|full`
-  const head = `${hint}${off}`
-  return viewOf(setting) === 'full' ? [head, ...issues.map(issue => `  - ${issue}`)] : [head]
 }
 
 /** What a rejected call tells the model: the count and every issue, word for word. */
@@ -679,7 +687,9 @@ export const CLOSING_EMPTY = '​'
 
 export function closingText(raw: unknown, view: ReplyView): string {
   const markdown = renderReply(raw, view).trim()
-  return markdown === '' ? CLOSING_EMPTY : `${CLOSING_MARK}${markdown}`
+  // A `**` that opens on punctuation is only bold after a space or a line start, and the marker is neither.
+  const gap = /^\*\*[\p{P}\p{S}]/u.test(markdown) ? ' ' : ''
+  return markdown === '' ? CLOSING_EMPTY : `${CLOSING_MARK}${gap}${markdown}`
 }
 
 // Matches an AssistantMessage that is a closing step: marked, or the old bare invisible text.

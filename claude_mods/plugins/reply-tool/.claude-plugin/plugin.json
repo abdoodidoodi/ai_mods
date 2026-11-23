@@ -1,5 +1,5 @@
 {
   "name": "reply-tool",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Claude delivers each reply through a structured respond tool (bottom line, verdicts, decisions, caveats, next step), drawn at the detail level you pick with /reply off|tldr|exec|full."
 }

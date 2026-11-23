@@ -10,11 +10,11 @@ import {
   addStats,
   closingText,
   formatStats,
+  indicatorText,
   parseSetting,
   readStats,
   rejectionText,
   renderReply,
-  replyFooter,
   toolSpec,
   validateReply,
   viewOf,
@@ -37,6 +37,8 @@ async function setMode($: EngineInterface, want: Setting): Promise<string> {
   const now = await read($, mode)
   if (want === now) return `reply-tool is already set to ${now}.`
   await putMode($, want)
+  // The bottom-bar indicator follows the setting at once.
+  $.ui.status(indicatorText(want))
   if (now !== 'off' && want !== 'off') return `reply-tool now draws replies as ${want}.`
   await $.tool.register(toolSpec(want !== 'off'))
   return want === 'off'
@@ -83,7 +85,10 @@ export const register: Register = on => {
       name: 'reply_stats',
       description: 'reply-tool: show the counters: turns, structured replies, rejections',
     })
-    await $.tool.register(toolSpec((await read($, mode)) !== 'off'))
+    const current = await read($, mode)
+    await $.tool.register(toolSpec(current !== 'off'))
+    // A hot reload keeps the setting, so the indicator is laid again from it.
+    $.ui.status(indicatorText(current))
     return started
   })
 
@@ -193,26 +198,17 @@ export const register: Register = on => {
   on('ui.render', { component: 'ToolUse', props: { tool: 'mcp__reply-tool__respond' } }, async ($, e, next) => {
     // ctrl+o and an aborted call: the engine's own row, so the raw call stays inspectable.
     if (e.props.isExpanded === true || e.props.isInterrupted) return next(e)
-    const { Box, Markdown, Text } = $.ui.resolve(e)
-    const issues = validateReply(e.props.input)
+    const { Box, Markdown } = $.ui.resolve(e)
 
-    if (e.props.isErrored) return <Text dimColor>{`respond rejected: ${issues.length} issue(s)`}</Text>
+    // A rejected call (the validator's deny, or any refusal) ends as an errored tool result in the transcript, so
+    // the flag survives a resume and a redraw. It and the running moment before the verdict draw nothing: only the
+    // accepted call is drawn. The model still reads the rejection text; this only hides the drawing.
+    if (e.props.isErrored || e.props.isRunning) return <Box display="none" />
 
     // With the mod off a reply already in the transcript draws in full; so does the full setting.
-    const setting = await read($, mode)
-    const markdown = renderReply(e.props.input, viewOf(setting))
-    if (markdown.trim() === '') return <Text dimColor>respond: the reply is empty</Text>
-
-    const [head, ...rest] = replyFooter(setting, issues)
-    return (
-      <Box flexDirection="column">
-        <Markdown text={markdown} />
-        <Text dimColor>{head ?? ''}</Text>
-        {rest.map(line => (
-          <Text dimColor>{line}</Text>
-        ))}
-      </Box>
-    )
+    const markdown = renderReply(e.props.input, viewOf(await read($, mode)))
+    if (markdown.trim() === '') return <Box display="none" />
+    return <Markdown text={markdown} />
   })
 
   // The closing row (the marked reply text, or a bare zero-width space) is drawn as nothing in the terminal.
