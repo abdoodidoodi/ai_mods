@@ -6,9 +6,9 @@ A Claude Code mod that makes Claude deliver every reply through a `respond` tool
 
 Long replies bury the answer. With reply-tool the answer comes first, and you decide how much of the rest you read:
 
-- `tldr`: the bottom line, Claude's pick for each decision, and the links.
-- `exec`: the bottom line, one numbered verdict per question you asked, the decisions with their options, caveats, and the next step.
-- `full`: everything, including the support for each verdict and all the details.
+- `tldr`: the bold headline, one line per question (the question in bold, then the verdict), one line per decision (the choice in bold, then Claude's pick), and the links.
+- `exec`: tldr plus each question's `Why`, the options of each decision, the caveats, the section headings and top-level bullets of the details, the next step, and a `Links` heading.
+- `full`: exec plus each question's `Details` and the nested bullets of the details sections.
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
 
@@ -52,24 +52,35 @@ reply-tool is off at the start of every session. Two commands:
   - `tldr`, `exec`, `full`: Claude ends each turn with the `respond` tool, and replies are drawn at that level.
 - `/reply_stats` shows counters kept across sessions: turns while enabled, replies delivered through `respond`, plain-text fallbacks, replies that still had a validation issue, first calls that passed validation, and rejections.
 
-What each view shows:
+What each view shows. The three views are one outline cut at three depths: every line of `tldr` is in `exec`, and every line of `exec` is in `full`, in the same order and styled the same. Lines only appear or disappear; nothing reorders. The only exception is the `Links` heading, which `tldr` leaves out.
 
-- `tldr`: the answer (or each question's verdict as a bullet when the answer is empty), each decision as a short block (the choice, then `Recommendation:` and Claude's pick), and the links without a heading.
-- `exec`: the answer, a numbered line per question (your question in bold, then the verdict), each decision as its own block (`Decision` and the choice in bold, the options, then `Recommendation:` and the pick), `⚠` caveats, the next step on a line of its own starting with `→`, and the links under a bold `Links` heading.
-- `full`: `exec` plus each question's `why` and `details` (indented under its number), and the reply's `details` after the links.
+Every view has the same fixed block order: headline, questions, decisions, caveats, details sections, next step, links. Links are always last.
 
-Decisions, options and links:
+| Element | tldr | exec adds | full adds |
+| --- | --- | --- | --- |
+| `answer` | bold headline | | |
+| each question | `**ask** verdict` | `- **Why**: ...` | `- **Details**: ...` (nested when a list) |
+| each decision | `**choice** pick` | the option bullets, recommended first | |
+| caveats | | `⚠ caveat`, one line each | |
+| `details` | | section headings, top-level bullets, paragraphs, tables | nested bullets and anything indented under a bullet |
+| `next` | | `→ next` | |
+| links | `- [label](url)` bullets | the same under a bold `Links` heading | |
 
-- **Decisions look different from the summary.** In the terminal each decision is a block with a cyan bar on its left and a cyan `Decision` label before the bold choice. On Desktop and mobile (the closing markdown text) it is a blockquote, so it gets the left bar there too.
-- **No star.** The recommended option carries `[Recommended]` after its name.
-- **Bold before the colon.** An option reads `**Name**: what it costs or gains`; only the part before the colon is bold.
-- **Option colors (terminal only).** Each option has a `stance`: `recommended` is drawn green, `option` blue, `not_recommended` (listed for completeness, not advised) red. Desktop and mobile cannot color, so they show `[Recommended]` only. Each decision has exactly one `recommended` option.
-- **Links show just their label,** as a clickable link: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown.
+Spacing and emphasis:
+
+- **One blank line between blocks,** none inside one: each question, each decision, the caveats, each details section, the next step and the links are separate blocks, and lists are tight.
+- **Bold before the colon.** Every bullet of the form `Label: text` (label up to 6 words, no backticks or URLs) has a bold label; the mod adds the bold when the model did not. A colon in a time such as `10:00`, or one not followed by a space, does not count.
+- **Options.** `- [Recommended] **Name**: consequence` for the recommended option, always first, then the others in their given order as `- **Name**: consequence`.
+- **Option colors (terminal only).** `[Recommended]` and the name of the recommended option are green, `option` names blue, `not_recommended` names red. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. Each decision has exactly one `recommended` option.
+- **Links show just their label,** as a clickable link: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown. They are always the last block.
 - **A blank line above every reply** in the terminal, between your prompt and the answer.
+- **No decision label, bar or blockquote:** a decision is a bold choice and the pick, followed by its options.
+
+Details are written as an outline: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. `exec` shows the headings and top-level bullets (and any paragraph or table); `full` shows everything, including a code block nested under a bullet.
 
 Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
 
-In every view the bottom line is bold and a blank line separates each block (answer, questions, decisions, caveats, next step, links), so nothing runs into the next. There is no footer under a reply.
+There is no footer under a reply.
 
 While reply-tool is on, a small indicator under the prompt shows the view, for example `exec` (the terminal draws it in the notice area just above `bypass permissions on`, as `⚠ reply-tool: exec`; Claude Code adds the prefix and glyph, and `$.ui.status` takes only text). It is set with `$.ui.status`, the mod's own pinned status line, so it never touches the `statusLine` setting. It changes the moment `/reply` does and is gone while the mod is off. `/reply` still shows a toast when the setting changes.
 
@@ -81,72 +92,136 @@ The same reply, as Claude sends it:
 
 ```json
 {
-  "answer": "Partly: checkout is fixed, shipping waits on QA.",
+  "answer": "Checkout is fixed; one call needed on the release date.",
   "questions": [
     {
-      "ask": "Does checkout still fail?",
-      "verdict": "No, failures fell from 4% to 0.1%.",
-      "why": "The retry covers timeouts.",
-      "details": "Fix is in MR !441."
+      "ask": "Does checkout still fail on Safari?",
+      "verdict": "No, the failure rate fell from 4% to 0.1%.",
+      "why": "The retry now covers the timeout path.",
+      "details": "- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441"
     },
-    { "ask": "Can we ship Friday?", "verdict": "Yes, if QA signs off Thursday." }
+    {
+      "ask": "Can we ship Friday?",
+      "verdict": "Yes, if QA signs off by Thursday."
+    }
   ],
   "decisions": [
     {
-      "choice": "Ship Friday?",
-      "pick": "Ship, the risk is low.",
+      "choice": "Ship Friday or wait a week?",
+      "pick": "Ship Friday, the risk is low.",
       "options": [
-        { "name": "Ship", "consequence": "5 days sooner.", "stance": "recommended" },
-        { "name": "Wait", "consequence": "One more regression pass.", "stance": "option" },
-        { "name": "Skip QA", "consequence": "No regression check.", "stance": "not_recommended" }
+        {
+          "name": "Wait a week",
+          "consequence": "One more regression pass.",
+          "stance": "option"
+        },
+        {
+          "name": "Ship Friday",
+          "consequence": "Customers get the fix 5 days sooner.",
+          "stance": "recommended"
+        },
+        {
+          "name": "Skip QA",
+          "consequence": "Ships today with no regression check.",
+          "stance": "not_recommended"
+        }
       ]
     }
   ],
-  "caveats": ["Safari 16 is untested."],
-  "next": "Want me to draft the QA request?",
-  "links": [{ "label": "Report", "path": "/tmp/r.html" }]
+  "caveats": [
+    "Safari 16 was not tested."
+  ],
+  "details": "**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00\n\n**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours",
+  "next": "Want me to draft the QA sign-off request?",
+  "links": [
+    {
+      "label": "Test report",
+      "path": "/home/me/reports/checkout.html"
+    }
+  ]
 }
 ```
 
 Drawn at `tldr`:
 
 ```
-**Partly: checkout is fixed, shipping waits on QA.**
+**Checkout is fixed; one call needed on the release date.**
 
-> **Decision: Ship Friday?**
->
-> **Recommendation:** Ship, the risk is low.
+**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
 
-* [Report](file:///tmp/r.html)
+**Can we ship Friday?** Yes, if QA signs off by Thursday.
+
+**Ship Friday or wait a week?** Ship Friday, the risk is low.
+
+- [Test report](file:///home/me/reports/checkout.html)
 ```
 
 Drawn at `exec`:
 
 ```
-**Partly: checkout is fixed, shipping waits on QA.**
+**Checkout is fixed; one call needed on the release date.**
 
-1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.
+**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
+- **Why**: The retry now covers the timeout path.
 
-2. **Can we ship Friday?** Yes, if QA signs off Thursday.
+**Can we ship Friday?** Yes, if QA signs off by Thursday.
 
-> **Decision: Ship Friday?**
->
-> - **Ship [Recommended]**: 5 days sooner.
-> - **Wait**: One more regression pass.
-> - **Skip QA**: No regression check.
->
-> **Recommendation:** Ship, the risk is low.
+**Ship Friday or wait a week?** Ship Friday, the risk is low.
+- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.
+- **Wait a week**: One more regression pass.
+- **Skip QA**: Ships today with no regression check.
 
-⚠ Safari 16 is untested.
+⚠ Safari 16 was not tested.
 
-→ Want me to draft the QA request?
+**Rollout**
+- **Canary**: 5% on Thursday
+- **Full**: Friday 10:00
+
+**Risks**
+- **Old sessions**: carts opened before the deploy keep the old code
+
+→ Want me to draft the QA sign-off request?
 
 **Links**
-
-* [Report](file:///tmp/r.html)
+- [Test report](file:///home/me/reports/checkout.html)
 ```
 
-The text above is the markdown source (what Desktop and mobile show); the terminal draws the same content itself, with the colored options and a label-only hyperlink. At `full`, the first verdict also gains "The retry covers timeouts." and "Fix is in MR !441.", each indented under its number, and the reply's `details` come last. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
+Drawn at `full`: `exec` plus the question's `Details` and the nested bullets under Canary and Old sessions:
+
+```
+**Checkout is fixed; one call needed on the release date.**
+
+**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
+- **Why**: The retry now covers the timeout path.
+- **Details**:
+  - **Fix**: retry wrapper in `checkout/pay.ts`
+  - MR !441
+
+**Can we ship Friday?** Yes, if QA signs off by Thursday.
+
+**Ship Friday or wait a week?** Ship Friday, the risk is low.
+- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.
+- **Wait a week**: One more regression pass.
+- **Skip QA**: Ships today with no regression check.
+
+⚠ Safari 16 was not tested.
+
+**Rollout**
+- **Canary**: 5% on Thursday
+  - Watch the error dashboard for 2 hours
+- **Full**: Friday 10:00
+
+**Risks**
+- **Old sessions**: carts opened before the deploy keep the old code
+  - They expire within 24 hours
+
+→ Want me to draft the QA sign-off request?
+
+**Links**
+- [Test report](file:///home/me/reports/checkout.html)
+```
+
+The text above is the markdown source (what Desktop and mobile show); the terminal draws the same lines itself, with the options colored by stance and a label-only hyperlink. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
 
 ## Screenshots
 
@@ -162,8 +237,8 @@ The `respond` tool takes one JSON object. Only `answer` is required.
 | `questions` | array | One entry per question you asked, in your order, at most 5. Omitted when you asked one question. |
 | `questions[].ask` | string | Your question in your words, at most 12 words. Required. |
 | `questions[].verdict` | string | One sentence: the verdict first, then the number or effect. No ids, paths, URLs or code. Required. |
-| `questions[].why` | string | Optional: at most 2 sentences of support. Drawn in `full`. |
-| `questions[].details` | string | Optional markdown: evidence, mechanics, ticket ids, file paths. Drawn in `full`. |
+| `questions[].why` | string | Optional: at most 2 sentences of support. Drawn in `exec` and `full`. |
+| `questions[].details` | string | Optional: evidence, mechanics, ticket ids, file paths, best written as bullets. Drawn in `full`. |
 | `decisions` | array | Only when you must choose. One entry per choice. |
 | `decisions[].choice` | string | The decision, phrased as a question. Required. |
 | `decisions[].pick` | string | One line: what Claude recommends and why. Required. |
@@ -171,7 +246,7 @@ The `respond` tool takes one JSON object. Only `answer` is required.
 | `caveats` | array of strings | At most 2, one clause each, only when one changes a decision. |
 | `next` | string | A question or offer that reads on its own. |
 | `links` | array | Deliverables you open: `label` and `path` (an absolute path or an http(s) URL). Always drawn as the label alone, as a clickable link to the path or URL. |
-| `details` | string | Optional markdown for everything else. Drawn in `full`. |
+| `details` | string | Optional outline for everything else: bold section headings, top-level bullets as `**Label**: one line`, deeper material as nested bullets. `exec` draws the headings and top-level bullets, `full` everything. |
 
 The tool checks, and rejects with the exact issues:
 
@@ -187,7 +262,7 @@ The tool checks, and rejects with the exact issues:
 
 - **The `respond` tool.** The mod registers it at session start. While reply-tool is off it is deferred and described as inactive (and a call that still comes is turned away). While it is on, the tool is active, and its description holds the reply rules, a worked example, and the delivery rule: end every turn by calling `respond`, and write nothing else after it returns `delivered`. The contract also rides in the tool description, so it reaches the model even where plugins' `prompt.compose` hooks are skipped; where they run, the mod adds the same contract as a system-prompt section.
 - **Validation.** Each call is checked by the rules above. A reply with issues is rejected with a message that lists every issue word for word, and Claude calls `respond` again with the complete reply. Each turn allows 2 rejections; after that the next call is accepted as it is, so a reply is never lost to a strict rule (it counts as a reply with issues in `/reply_stats`).
-- **Rendering.** The mod draws the `respond` tool row as the formatted reply, as one markdown string for the current view. The row reads the setting while it draws, so `/reply` redraws past replies at once. The result row (`delivered`) is hidden, and so is a rejected call's row: it ends as an errored tool result in the transcript, which is what the row hook reads, so it stays hidden on redraw and resume.
+- **Rendering.** The mod draws the `respond` tool row as the formatted reply, as one outline cut at the current view's depth (a list of blocks of lines, each tagged with the depth that shows it), joined into one markdown string; the terminal draws the same blocks with colored options. The row reads the setting while it draws, so `/reply` redraws past replies at once. The result row (`delivered`) is hidden, and so is a rejected call's row: it ends as an errored tool result in the transcript, which is what the row hook reads, so it stays hidden on redraw and resume.
 - **The closing step.** After `delivered` the turn is over, but the model's next request would come back with no text and the loop would nudge it to write the reply again. The mod answers that one step itself, sending no further request. Its text is the reply rendered as markdown at the current view, behind an invisible zero-width marker.
 - **Outside the terminal.** The Desktop app and the mobile app draw the transcript with their own interface and fold the `respond` call into the collapsed activity group ("Ran 4 commands, used reply-tool"), so the tool row never appears there. The closing step's text is ordinary assistant text, so those apps show the reply under the group. The terminal hides that marked message, because the tool row already draws the reply, so it looks as it always did, with no duplicate. The mod API has no way to show assistant text without putting it in the conversation, so the text is kept.
 - **Subagents are unaffected.** `respond` is for the main conversation only, so a subagent that calls it is told to report in plain text, and its report reaches the agent that spawned it as written.

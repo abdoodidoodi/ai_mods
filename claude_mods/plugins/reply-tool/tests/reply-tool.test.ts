@@ -4,109 +4,173 @@ import type { Engine } from 'claude-code/testing'
 
 type Mounted = Awaited<ReturnType<Engine['ui']['mount']>>
 
-import { CLOSING_MARK, CLOSING_MATCHER, REPLY_SCHEMA, WORKED_EXAMPLE, closingText, indicatorText, renderReply, validateReply } from '../hooks/reply'
+import { CLOSING_MARK, CLOSING_MATCHER, REPLY_SCHEMA, WORKED_EXAMPLE, boldLabel, closingText, indicatorText, renderReply, validateReply, viewBlocks } from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
 const SAMPLE = {
-  answer: 'Partly: checkout is fixed, shipping waits on QA.',
+  answer: 'Checkout is fixed; one call needed on the release date.',
   questions: [
     {
-      ask: 'Does checkout still fail?',
-      verdict: 'No, failures fell from 4% to 0.1%.',
-      why: 'The retry covers timeouts.',
-      details: 'Fix is in MR !441.',
+      ask: 'Does checkout still fail on Safari?',
+      verdict: 'No, the failure rate fell from 4% to 0.1%.',
+      why: 'The retry now covers the timeout path.',
+      details: '- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441',
     },
-    { ask: 'Can we ship Friday?', verdict: 'Yes, if QA signs off Thursday.' },
+    { ask: 'Can we ship Friday?', verdict: 'Yes, if QA signs off by Thursday.' },
   ],
   decisions: [
     {
-      choice: 'Ship Friday?',
-      pick: 'Ship, the risk is low.',
+      choice: 'Ship Friday or wait a week?',
+      pick: 'Ship Friday, the risk is low.',
       options: [
-        { name: 'Ship', consequence: '5 days sooner.', stance: 'recommended' },
-        { name: 'Wait', consequence: 'One more regression pass.', stance: 'option' },
-        { name: 'Skip QA', consequence: 'No regression check.', stance: 'not_recommended' },
+        { name: 'Wait a week', consequence: 'One more regression pass.', stance: 'option' },
+        { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', stance: 'recommended' },
+        { name: 'Skip QA', consequence: 'Ships today with no regression check.', stance: 'not_recommended' },
       ],
     },
   ],
-  caveats: ['Safari 16 is untested.'],
-  next: 'Want me to draft the QA request?',
-  links: [{ label: 'Report', path: '/tmp/r.html' }],
-  details: 'Full log attached.',
+  caveats: ['Safari 16 was not tested.'],
+  details: [
+    '**Rollout**',
+    '- **Canary**: 5% on Thursday',
+    '  - Watch the error dashboard for 2 hours',
+    '- **Full**: Friday 10:00',
+    '',
+    '**Risks**',
+    '- **Old sessions**: carts opened before the deploy keep the old code',
+    '  - They expire within 24 hours',
+  ].join('\n'),
+  next: 'Want me to draft the QA sign-off request?',
+  links: [{ label: 'Test report', path: '/home/me/reports/checkout.html' }],
 }
 
-const LINK = '* [Report](file:///tmp/r.html)'
-const LINKS_EXEC = '**Links**\n\n' + LINK
-const DECISION_TLDR = '> **Decision: Ship Friday?**\n>\n> **Recommendation:** Ship, the risk is low.'
-const DECISION_EXEC = [
-  '> **Decision: Ship Friday?**',
-  '>',
-  '> - **Ship [Recommended]**: 5 days sooner.',
-  '> - **Wait**: One more regression pass.',
-  '> - **Skip QA**: No regression check.',
-  '>',
-  '> **Recommendation:** Ship, the risk is low.',
+const HEAD = '**Checkout is fixed; one call needed on the release date.**'
+const Q1 = '**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
+const Q2 = '**Can we ship Friday?** Yes, if QA signs off by Thursday.'
+const D1 = '**Ship Friday or wait a week?** Ship Friday, the risk is low.'
+const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
+const DECISION = [
+  D1,
+  '- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.',
+  '- **Wait a week**: One more regression pass.',
+  '- **Skip QA**: Ships today with no regression check.',
 ].join('\n')
 
-const TLDR = [
-  '**Partly: checkout is fixed, shipping waits on QA.**',
-  DECISION_TLDR,
-  LINK,
-].join('\n\n')
+const TLDR = [HEAD, Q1, Q2, D1, LINK].join('\n\n')
 
 const EXEC = [
-  '**Partly: checkout is fixed, shipping waits on QA.**',
-  '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
-  DECISION_EXEC,
-  '⚠ Safari 16 is untested.',
-  '→ Want me to draft the QA request?',
-  LINKS_EXEC,
+  HEAD,
+  [Q1, '- **Why**: The retry now covers the timeout path.'].join('\n'),
+  Q2,
+  DECISION,
+  '⚠ Safari 16 was not tested.',
+  '**Rollout**\n- **Canary**: 5% on Thursday\n- **Full**: Friday 10:00',
+  '**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code',
+  '→ Want me to draft the QA sign-off request?',
+  '**Links**\n' + LINK,
 ].join('\n\n')
 
 const FULL = [
-  '**Partly: checkout is fixed, shipping waits on QA.**',
-  '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n\n   The retry covers timeouts.\n\n   Fix is in MR !441.\n\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
-  DECISION_EXEC,
-  '⚠ Safari 16 is untested.',
-  '→ Want me to draft the QA request?',
-  LINKS_EXEC,
-  'Full log attached.',
+  HEAD,
+  [
+    Q1,
+    '- **Why**: The retry now covers the timeout path.',
+    '- **Details**:',
+    '  - **Fix**: retry wrapper in `checkout/pay.ts`',
+    '  - MR !441',
+  ].join('\n'),
+  Q2,
+  DECISION,
+  '⚠ Safari 16 was not tested.',
+  '**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00',
+  '**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours',
+  '→ Want me to draft the QA sign-off request?',
+  '**Links**\n' + LINK,
 ].join('\n\n')
 
-test('a sample reply renders as tldr, exec and full: bold headline, a blank line between blocks, no view footer', () => {
+const lines = (text: string): string[] =>
+  text
+    .split('\n')
+    .filter(line => line.trim() !== '')
+    .map(line => line.trimEnd())
+
+test('the fixture renders as exactly this markdown in tldr, exec and full', () => {
   expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
   expect(renderReply(SAMPLE, 'exec')).toBe(EXEC)
   expect(renderReply(SAMPLE, 'full')).toBe(FULL)
   for (const view of ['tldr', 'exec', 'full'] as const) {
-    expect(renderReply(SAMPLE, view)).not.toMatch(/\/reply|exec ·|tldr ·|full ·/)
+    const md = renderReply(SAMPLE, view)
+    expect(md).not.toMatch(/\/reply|exec ·|tldr ·|full ·|Decision|^>/m)
+    // Exactly one blank line between blocks, and none inside a list.
+    expect(md).not.toMatch(/\n\n\n/)
+    if (view !== 'tldr') expect(md).not.toMatch(/\n\n- /)
   }
-
-  // An empty answer falls back to the verdicts as bullets as tldr.
-  expect(renderReply({ ...SAMPLE, answer: '', decisions: [], links: [] }, 'tldr')).toBe(
-    '- No, failures fell from 4% to 0.1%.\n- Yes, if QA signs off Thursday.',
-  )
 })
 
-test('bold never spans a line break, keeps list markers, and leaves a line the model already bolded', () => {
+test('the views are one outline: every line of tldr is in exec, and of exec in full, in order; links come last', () => {
+  const inOrder = (small: string[], big: string[]) => {
+    let at = 0
+    for (const line of small) {
+      at = big.indexOf(line, at)
+      expect(at, line).toBeGreaterThanOrEqual(0)
+      at += 1
+    }
+  }
+  const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(SAMPLE, view)))
+  inOrder(tldr, exec)
+  inOrder(exec, full)
+  expect(tldr).not.toContain('**Links**')
+  expect(exec).toContain('**Links**')
+  for (const view of [tldr, exec, full]) expect(view.at(-1)).toBe(LINK)
+  expect(viewBlocks(SAMPLE, 'tldr')).toHaveLength(5)
+})
+
+test('the recommended option is first with a [Recommended] prefix, wherever it was given; picked replies still draw', () => {
+  const exec = renderReply(SAMPLE, 'exec')
+  expect(exec).toContain(D1 + '\n- [Recommended] **Ship Friday**:')
+  expect(exec.indexOf('Wait a week**')).toBeLessThan(exec.indexOf('Skip QA**'))
+  expect(exec).not.toContain('Ship Friday [Recommended]')
+  const old = {
+    answer: 'A.',
+    decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Stay', consequence: 'd.', picked: false }, { name: 'Go', consequence: 'c.', picked: true }] }],
+  }
+  expect(renderReply(old, 'exec')).toBe('**A.**\n\n**Go?** Yes.\n- [Recommended] **Go**: c.\n- **Stay**: d.')
+  expect(renderReply(old, 'tldr')).toBe('**A.**\n\n**Go?** Yes.')
+})
+
+test('a bullet of the form Label: text gets a bold label; a time, a URL, a code label or a long label does not', () => {
+  expect(boldLabel('Fix: retry wrapper')).toBe('**Fix**: retry wrapper')
+  expect(boldLabel('Built by Codex:')).toBe('**Built by Codex**:')
+  expect(boldLabel('Full: Friday 10:00')).toBe('**Full**: Friday 10:00')
+  expect(boldLabel('Friday 10:00')).toBe('Friday 10:00')
+  expect(boldLabel('Meet at 10:00 sharp')).toBe('Meet at 10:00 sharp')
+  expect(boldLabel('**Done**: already')).toBe('**Done**: already')
+  expect(boldLabel('See `a: b`')).toBe('See `a: b`')
+  expect(boldLabel('https://x.test/a: b')).toBe('https://x.test/a: b')
+  expect(boldLabel('one two three four five six seven: too long')).toBe('one two three four five six seven: too long')
+  const md = renderReply({ answer: 'A', details: '**S**\n- Rate: 5%\n- Starts 10:00\n  - Inner: note\n\nA plain paragraph: not bolded' }, 'full')
+  expect(md).toContain('- **Rate**: 5%')
+  expect(md).toContain('- Starts 10:00')
+  expect(md).toContain('  - **Inner**: note')
+  expect(md).toContain('A plain paragraph: not bolded')
+})
+
+test('details prune by depth: headings and top-level bullets in exec, nested and fenced-under-bullet material only in full', () => {
+  const details = ['# Plan', '- step one', '  - sub step', '  ```', '  code under bullet', '  ```', '- step two', '', 'A paragraph.', '', '| a | b |', '| - | - |'].join('\n')
+  expect(renderReply({ answer: 'A', details }, 'exec')).toBe('**A**\n\n# Plan\n- step one\n- step two\n\nA paragraph.\n\n| a | b |\n| - | - |')
+  const full = renderReply({ answer: 'A', details }, 'full')
+  expect(full).toContain('- step one\n  - sub step\n  ```\n  code under bullet\n  ```\n- step two')
+  expect(renderReply({ answer: 'A', details }, 'tldr')).toBe('**A**')
+})
+
+test('a headline-less reply, and a bold the model wrote itself', () => {
   expect(renderReply({ answer: 'One line.' }, 'exec')).toBe('**One line.**')
-  expect(renderReply({ answer: 'Top\n\n- item one\n  - nested' }, 'exec')).toBe('**Top**\n\n- **item one**\n  - **nested**')
   expect(renderReply({ answer: 'Has **already** bold' }, 'exec')).toBe('Has **already** bold')
+  expect(renderReply({ answer: '', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }, 'tldr')).toBe('**Q?** V.\n\n**R?** W.')
   // The closing text opens with an invisible marker; a bold that starts on punctuation gets a space so it still renders.
   expect(closingText({ answer: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + ' **"Yes" it is.**')
   expect(closingText({ answer: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '**Yes it is.**')
-})
-
-test('tldr draws each decision as a blockquote with its recommendation, and falls back when the choice is empty', () => {
-  const [first] = SAMPLE.decisions
-  const second = { ...first, choice: 'Notify users?', pick: 'Yes, a short note.' }
-  const tldr = renderReply({ ...SAMPLE, answer: 'A', decisions: [first, second], links: [] }, 'tldr')
-  expect(tldr).toContain(DECISION_TLDR)
-  expect(tldr).toContain('> **Decision: Notify users?**\n>\n> **Recommendation:** Yes, a short note.')
-  expect(renderReply({ ...SAMPLE, answer: 'A', decisions: [{ ...first, choice: '' }], links: [] }, 'tldr')).toBe(
-    '**A**\n\n> **Recommendation:** Ship, the risk is low.',
-  )
-  expect(renderReply(SAMPLE, 'full')).not.toContain('★')
 })
 
 test('stance validation: exactly one recommended per decision, a known value on every option, picked no longer accepted', () => {
@@ -126,16 +190,6 @@ test('stance validation: exactly one recommended per decision, a known value on 
   expect(Object.keys(props)).toEqual(['name', 'consequence', 'stance'])
 })
 
-test('an old reply with picked booleans still draws: picked is recommended, the rest options', () => {
-  const old = {
-    answer: 'A.',
-    decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Go', consequence: 'c.', picked: true }, { name: 'Stay', consequence: 'd.', picked: false }] }],
-  }
-  expect(renderReply(old, 'exec')).toBe(
-    '**A.**\n\n> **Decision: Go?**\n>\n> - **Go [Recommended]**: c.\n> - **Stay**: d.\n>\n> **Recommendation:** Yes.',
-  )
-})
-
 test('validation flags a bare id and a two-sentence verdict, and passes the worked example', () => {
   const issues = validateReply({
     answer: 'Yes.',
@@ -149,6 +203,7 @@ test('validation flags a bare id and a two-sentence verdict, and passes the work
     'questions[1].verdict has 2 sentences (max 1)',
   ])
   expect(validateReply(WORKED_EXAMPLE)).toEqual([])
+  expect(renderReply(WORKED_EXAMPLE, 'exec')).toBe(EXEC)
   expect(validateReply({})).toEqual(['answer is missing'])
 })
 
@@ -158,20 +213,15 @@ test('links draw as just the label: [label](url), no path text; only an absolute
     { label: 'Site', path: 'https://example.com/a b(1)' },
     { label: 'Report', path: '/tmp/r.html' },
   ]
-  expect(renderReply({ answer: 'Done.', links }, 'tldr')).toBe(
-    [
-      '**Done.**',
-      [
-        '* \\[Docs\\]\\(https://evil.example\\): `javascript:alert(1)`',
-        '* [Site](https://example.com/a%20b%281%29)',
-        '* [Report](file:///tmp/r.html)',
-      ].join('\n'),
-    ].join('\n\n'),
-  )
+  const list = [
+    '- \\[Docs\\]\\(https://evil.example\\): `javascript:alert(1)`',
+    '- [Site](https://example.com/a%20b%281%29)',
+    '- [Report](file:///tmp/r.html)',
+  ].join('\n')
+  expect(renderReply({ answer: 'Done.', links }, 'tldr')).toBe('**Done.**\n\n' + list)
   // exec and full carry a bold Links heading; tldr has none.
-  expect(renderReply({ answer: 'Done.', links }, 'exec')).toContain('**Links**\n\n* \\[Docs\\]')
+  expect(renderReply({ answer: 'Done.', links }, 'exec')).toBe('**Done.**\n\n**Links**\n' + list)
   expect(renderReply({ answer: 'Done.', links }, 'tldr')).not.toContain('Links')
-  expect(renderReply({ answer: 'Done.', links }, 'exec')).not.toContain('/tmp/r.html]')
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual(['links[0].path should be an absolute path or an http(s) URL'])
 })
 
@@ -183,22 +233,19 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs behind the
   ]
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual([])
   const out = renderReply({ answer: 'Done.', links }, 'tldr')
-  expect(out).toContain('* [A](file:///C:/Users/Me/My%20Report.html)')
-  expect(out).toContain('* [B](file:///C:/Users/Me/r%281%29.html)')
-  expect(out).toContain('* [C](file://srv/share/a%20b.txt)')
+  expect(out).toContain('- [A](file:///C:/Users/Me/My%20Report.html)')
+  expect(out).toContain('- [B](file:///C:/Users/Me/r%281%29.html)')
+  expect(out).toContain('- [C](file://srv/share/a%20b.txt)')
   expect(out).not.toContain('C:\\')
   expect(validateReply({ ...WORKED_EXAMPLE, links: [{ label: 'x', path: 'C:relative' }] })).toHaveLength(1)
 })
 
 test('literal backslash-n escapes become real line breaks, except in code spans or when real newlines exist', () => {
-  const answer = 'wmux (your app)\\n- Built by Codex:\\n  - sessions survive restarts;'
-  expect(renderReply({ answer }, 'full')).toBe('**wmux (your app)**\n- **Built by Codex:**\n  - **sessions survive restarts;**')
-  expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**\n**b\tc**')
-  expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**\n**Done**')
-  expect(renderReply({ answer: 'real\nbreak and literal \\n stay' }, 'full')).toBe('**real**\n**break and literal \\n stay**')
+  expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**  \n**b\tc**')
+  expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**  \n**Done**')
   const full = renderReply({ answer: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
-  expect(full).toContain('   x\n   y')
-  expect(full.endsWith('p\nq')).toBe(true)
+  expect(full).toContain('- **Details**:\n  - x\n  - y')
+  expect(full.endsWith('p  \nq')).toBe(true)
   // A Windows path in a link is never touched.
   expect(renderReply({ answer: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
 })
@@ -217,26 +264,31 @@ const run = ($: Engine, command: string, args = '') =>
 const respond = ($: Engine, input: Record<string, unknown>) =>
   ($.tool.call as unknown as (call: unknown) => Promise<{ deny?: string; result?: string }>)({ tool: RESPOND, ...input })
 
-// An `enabled: true` a pre-release build stored sits in the store: reply-tool must ignore it.
-// The terminal draws a reply as parts: a top margin, markdown blocks, a decision with colored options, links as labels.
+// The terminal draws the outline: a top margin, one column per block, markdown lines, options colored by stance, links as labels.
 const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') => {
   expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
   const markdown = (await ui.findAll({ type: 'Markdown' })).map(node => node.text).join('\n\n')
-  expect(markdown).toContain('**Partly: checkout is fixed, shipping waits on QA.**')
-  expect(markdown).not.toContain('★')
+  expect(markdown).toContain(HEAD)
+  expect(markdown).toContain(D1)
   expect(markdown).not.toContain('file:///')
+  expect(markdown).not.toContain('Decision')
+  expect(JSON.stringify(await ui.drawn())).not.toContain('cyan')
+  expect(markdown.includes('- **Why**')).toBe(view !== 'tldr')
+  expect(markdown.includes('- **Details**:')).toBe(view === 'full')
+  expect(markdown.includes('  - Watch the error dashboard')).toBe(view === 'full')
   const props = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern }))?.props
   if (view === 'tldr') {
-    expect(await props(/^Recommendation: $/)).toBeDefined()
-    expect(await props(/\[Recommended\]/)).toBeUndefined()
-    expect(await props(/^Links$/)).toBeUndefined()
+    expect(await props(/Recommended/)).toBeUndefined()
+    expect(markdown).not.toContain('Links')
   } else {
-    expect(await props(/^Ship \[Recommended\]$/)).toMatchObject({ color: 'green', weight: 'bold' })
-    expect(await props(/^Wait$/)).toMatchObject({ color: 'blue', weight: 'bold' })
+    expect(await props(/^\[Recommended\] $/)).toMatchObject({ color: 'green', weight: 'bold' })
+    expect(await props(/^Ship Friday$/)).toMatchObject({ color: 'green', weight: 'bold' })
+    expect(await props(/^Wait a week$/)).toMatchObject({ color: 'blue', weight: 'bold' })
     expect(await props(/^Skip QA$/)).toMatchObject({ color: 'red', weight: 'bold' })
-    expect(await props(/^Links$/)).toMatchObject({ weight: 'bold' })
-    expect((await ui.find({ type: 'Link' }))?.props).toMatchObject({ href: 'file:///tmp/r.html' })
+    expect(markdown).toContain('**Links**')
+    expect(await props(/^: Customers get the fix 5 days sooner.$/)).toBeDefined()
   }
+  expect((await ui.find({ type: 'Link' }))?.props).toMatchObject({ href: 'file:///home/me/reports/checkout.html' })
 }
 
 const harness = (on: On, isStoreMocked = true) => {
@@ -340,7 +392,7 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
     if (surface === 'terminal') {
       await expectTerminalReply(reply, 'full')
     } else {
-      expect((await reply.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
+      expect((await reply.find({ type: 'Markdown' }))?.text).toBe(FULL)
     }
     expect(await reply.find({ type: 'Text', text: /\/reply|full ·/ })).toBeUndefined()
     await reply.unmount()

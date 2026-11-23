@@ -9,10 +9,12 @@ import {
   USAGE,
   addStats,
   closingText,
+  DEPTH,
+  RECOMMENDED_TAG,
+  joinMarkdown,
   linkTarget,
-  optionLabel,
-  partMarkdown,
-  replyParts,
+  oneLine,
+  viewBlocks,
   formatStats,
   indicatorText,
   parseSetting,
@@ -23,14 +25,11 @@ import {
   validateReply,
   viewOf,
 } from './reply'
-import type { ReplyDecision, ReplyLink, ReplyOption, ReplyPart, Setting, Stats, Stance } from './reply'
+import type { Block, Line, Setting, Stats, Stance } from './reply'
 
 // Drawn state: what a respond row reads while drawing. A change redraws past replies.
 // The setting (off, or on drawing tldr, exec or full) lives here alone, in the host's session state,
 // and is never written to `$.store`: every session starts with reply-tool off.
-/** The bar and the label of a decision block in the terminal. */
-const DECISION_COLOR = 'cyan'
-
 const mode = atom({ plugin: 'reply-tool', key: 'mode' } as const, 'off' as Setting)
 
 // One setter per atom: the state library's scan wants each atom named where it is written.
@@ -216,61 +215,60 @@ export const register: Register = on => {
     const view = viewOf(await read($, mode))
     const markdown = renderReply(e.props.input, view)
     if (markdown.trim() === '') return <Box display="none" />
-    // Desktop, VS Code and mobile draw the markdown: the decision is its blockquote, the links are `[label](url)`.
+    // Desktop, VS Code and mobile draw the markdown: the links are `[label](url)`; markdown has no colors.
     if (e.surface !== 'terminal') return <Markdown text={markdown} />
 
-    // The terminal draws the parts itself: a blank line above the reply, a colored bar beside each decision,
-    // colored option names, and links that show only their label (an OSC 8 hyperlink).
+    // The terminal draws the same blocks: a blank line above the reply, one blank line between blocks, tight lines
+    // inside them. Markdown lines are drawn by Markdown; option lines are colored by stance, links show only their label.
     const stanceColor: Record<Stance, string> = { recommended: 'green', option: 'blue', not_recommended: 'red' }
-    const drawOption = (option: ReplyOption, i: number) => (
-      <Text key={`k${i}`}>
-        <Text weight="bold" color={stanceColor[option.stance]}>{optionLabel(option)}</Text>
-        <Text>{`: ${option.consequence.trim()}`}</Text>
-      </Text>
-    )
-    const drawDecision = (decision: ReplyDecision, i: number, isBrief: boolean) => (
-      <Box key={`k${i}`} flexDirection="row">
-        <Box width={1} backgroundColor={DECISION_COLOR} marginRight={1} />
-        <Box flexDirection="column">
-          {decision.choice.trim() === '' ? null : (
-            <Text>
-              <Text color={DECISION_COLOR} weight="bold">{'Decision  '}</Text>
-              <Text weight="bold">{decision.choice.trim()}</Text>
-            </Text>
-          )}
-          {isBrief ? null : <Box flexDirection="column" marginTop={1}>{decision.options.map(drawOption)}</Box>}
-          <Box marginTop={isBrief && decision.choice.trim() === '' ? 0 : 1}>
-            <Text>
-              <Text weight="bold">{'Recommendation: '}</Text>
-              <Text>{decision.pick.trim()}</Text>
-            </Text>
-          </Box>
+    const drawLine = (line: Line, i: number) => {
+      if (line.kind === 'option') {
+        const { option } = line
+        const color = stanceColor[option.stance]
+        return (
+          <Text key={`k${i}`}>
+            {'- '}
+            {option.stance === 'recommended' ? <Text weight="bold" color={color}>{`${RECOMMENDED_TAG} `}</Text> : null}
+            <Text weight="bold" color={color}>{oneLine(option.name)}</Text>
+            <Text>{`: ${oneLine(option.consequence)}`}</Text>
+          </Text>
+        )
+      }
+      const link = line.kind === 'link' ? line.link : undefined
+      const href = link === undefined ? undefined : linkTarget(link)
+      const label = link === undefined ? '' : link.label.trim() === '' ? link.path.trim() : link.label.trim()
+      return (
+        <Text key={`k${i}`}>
+          {'- '}
+          {href === undefined ? label : <Link href={href}>{label}</Link>}
+        </Text>
+      )
+    }
+    // Consecutive markdown lines are one Markdown element; an option or link line breaks the run.
+    const drawBlock = (block: Block, i: number) => {
+      const nodes: ReturnType<typeof drawLine>[] = []
+      let run: Line[] = []
+      const flush = () => {
+        if (run.length > 0) nodes.push(<Markdown key={`m${i}-${nodes.length}`} text={joinMarkdown(run)} />)
+        run = []
+      }
+      block.forEach((line, j) => {
+        if (line.kind === 'md') run.push(line)
+        else {
+          flush()
+          nodes.push(drawLine(line, i * 1000 + j))
+        }
+      })
+      flush()
+      return (
+        <Box key={`k${i}`} flexDirection="column">
+          {nodes}
         </Box>
-      </Box>
-    )
-    const drawLinks = (links: ReplyLink[], hasHeading: boolean) => (
-      <Box flexDirection="column">
-        {hasHeading ? <Text weight="bold">Links</Text> : null}
-        {links.map((link, i) => {
-          const href = linkTarget(link)
-          const label = link.label.trim() === '' ? link.path.trim() : link.label.trim()
-          return (
-            <Text key={`k${i}`}>
-              {'- '}
-              {href === undefined ? label : <Link href={href}>{label}</Link>}
-            </Text>
-          )
-        })}
-      </Box>
-    )
-    const drawPart = (part: ReplyPart, i: number) => {
-      if (part.kind === 'markdown') return <Markdown key={`k${i}`} text={part.text} />
-      if (part.kind === 'decision') return drawDecision(part.decision, i, part.view === 'tldr')
-      return <Box key={`k${i}`}>{drawLinks(part.links, part.hasHeading)}</Box>
+      )
     }
     return (
       <Box flexDirection="column" marginTop={1} gap={1}>
-        {replyParts(e.props.input, view).map(drawPart)}
+        {viewBlocks(e.props.input, view).map(drawBlock)}
       </Box>
     )
   })

@@ -51,7 +51,7 @@ export const REPLY_SCHEMA = {
           why: { type: 'string', description: 'Optional, at most 2 sentences of support.' },
           details: {
             type: 'string',
-            description: 'Optional markdown: evidence, mechanics, MR/ticket ids, file paths, source links.',
+            description: 'Optional, drawn in full only: evidence, mechanics, MR/ticket ids, file paths. Write it as bullets, `- **Label**: one line`, nesting deeper material.',
           },
         },
       },
@@ -98,7 +98,7 @@ export const REPLY_SCHEMA = {
     },
     links: {
       type: 'array',
-      description: 'Deliverables the user opens (files, HTML reports, docs). Always shown.',
+      description: 'Deliverables the user opens (files, HTML reports, docs). Always shown, always last.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -111,7 +111,8 @@ export const REPLY_SCHEMA = {
     },
     details: {
       type: 'string',
-      description: 'Optional markdown for everything else: how it works, evidence, status detail.',
+      description:
+        'Optional outline for everything else: bold section headings (`**Rollout**`), each followed by top-level bullets written `- **Label**: one line`, and deeper material as nested bullets indented under them. exec shows the headings and top-level bullets; full shows everything.',
     },
   },
 } as const
@@ -378,17 +379,11 @@ export function validateReply(raw: unknown): string[] {
 // ---------------------------------------------------------------------------------------------
 // Rendering: one markdown string per view, drawn with the surface's Markdown element.
 
-// A line break inside a block that every markdown renderer keeps (two trailing spaces).
-const BREAK = '  \n'
-
-const indent = (text: string, spaces: number): string =>
-  text
-    .split('\n')
-    .map(line => (line === '' ? line : ' '.repeat(spaces) + line))
-    .join('\n')
+/** The tag before a recommended option's name. */
+export const RECOMMENDED_TAG = '[Recommended]'
 
 /** Model-supplied text on one line, so a line break cannot end a code span or start a block. */
-const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
+export const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 /** `text` with markdown-special characters backslash-escaped: it renders as text, never as a link, image, HTML or emphasis. */
 const escapeMarkdown = (text: string): string => text.replace(/[\\`*_[\]()<>#!|~]/g, '\\$&')
@@ -442,37 +437,6 @@ function boldLine(line: string): string {
   return `${match[1] ?? ''}**${match[2]}**${match[3] ?? ''}`
 }
 
-/** The bottom line in bold, line by line, so a multi-line answer stays valid markdown (bold never spans a break). */
-const boldBlock = (text: string): string => text.split('\n').map(boldLine).join('\n')
-
-/**
- * A numbered question: the ask in bold, then the verdict. In full the why and the details follow, indented under
- * their number, each as its own paragraph.
- */
-function renderQuestion(question: ReplyQuestion, index: number, view: ReplyView): string {
-  const ask = question.ask.trim() === '' ? '' : `**${question.ask.trim()}** `
-  const lines = [`${index + 1}. ${ask}${question.verdict.trim()}`]
-  if (view === 'full' && question.why.trim() !== '') lines.push(indent(question.why.trim(), 3))
-  if (view === 'full' && question.details.trim() !== '') lines.push(indent(question.details.trim(), 3))
-  return lines.join('\n\n')
-}
-
-/** The tag after a recommended option's name. */
-export const RECOMMENDED_TAG = '[Recommended]'
-
-/** An option's name as drawn: the name, then `[Recommended]` for the recommended one. */
-export const optionLabel = (option: ReplyOption): string =>
-  `${oneLine(option.name)}${option.stance === 'recommended' ? ` ${RECOMMENDED_TAG}` : ''}`
-
-/** A decision as a blockquote (a left bar everywhere): the choice in bold, the options, then the recommendation. */
-function renderDecision(decision: ReplyDecision, view: ReplyView): string {
-  const quote = (lines: string[]) => lines.map(line => (line === '' ? '>' : `> ${line}`)).join('\n')
-  const choice = decision.choice.trim() === '' ? [] : [`**Decision: ${oneLine(decision.choice)}**`, '']
-  const recommendation = `**Recommendation:** ${decision.pick.trim()}`
-  if (view === 'tldr') return quote([...choice, recommendation])
-  const options = decision.options.map(option => `- **${escapeMarkdown(oneLine(option.name))}${option.stance === 'recommended' ? ` ${RECOMMENDED_TAG}` : ''}**: ${option.consequence.trim()}`)
-  return quote([...choice, ...options, '', recommendation])
-}
 
 /**
  * A field the model wrote with literal `\n`, `\r\n` or `\t` escapes and no real line break gets real ones.
@@ -503,57 +467,209 @@ function unescapeReply(reply: Reply): Reply {
   }
 }
 
-/** One drawn piece of a reply: markdown, a decision, or the links. The terminal draws these natively, markdown joins them. */
-export type ReplyPart =
-  | { kind: 'markdown'; text: string }
-  | { kind: 'decision'; decision: ReplyDecision; view: ReplyView }
-  | { kind: 'links'; links: ReplyLink[]; hasHeading: boolean }
+// ---------------------------------------------------------------------------------------------
+// The outline: a reply is one list of blocks, each a list of lines tagged with the depth that shows it
+// (1 = tldr, 2 = exec, 3 = full). A view is the same outline with the deeper lines left out, so nothing
+// reorders or restyles between views: lines only appear or disappear.
 
-/** The reply as ordered parts for a view (tldr, exec, or full: exec plus each why and details). */
-export function replyParts(raw: unknown, view: ReplyView): ReplyPart[] {
+export type Depth = 1 | 2 | 3
+export const DEPTH: Record<ReplyView, Depth> = { tldr: 1, exec: 2, full: 3 }
+
+export type Line =
+  | { kind: 'md'; depth: Depth; text: string; isCode?: boolean }
+  | { kind: 'option'; depth: Depth; option: ReplyOption }
+  | { kind: 'link'; depth: Depth; link: ReplyLink }
+export type Block = Line[]
+
+const BULLET = /^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$/
+const isBulletText = (text: string): boolean => BULLET.test(text)
+
+/**
+ * `Label: text` with the label bold. The label is up to 6 words with no backtick, `*` or URL, and the colon is
+ * followed by a space or ends the line (a colon in `10:00` does not count). Text that already opens bold is left alone.
+ */
+export function boldLabel(content: string): string {
+  if (content.startsWith('**') || content.includes('://')) return content
+  const match = /^([^:`*]+?):(?=\s|$)\s*(.*)$/.exec(content)
+  const label = match?.[1]?.trim() ?? ''
+  if (match === null || label === '' || label.split(/\s+/).length > 6) return content
+  const rest = match[2] ?? ''
+  return `**${label}**:${rest === '' ? '' : ` ${rest}`}`
+}
+
+/** A markdown bullet line with its label bolded; any other line is returned as it is. */
+export function boldBullet(line: string): string {
+  const match = BULLET.exec(line)
+  return match === null ? line : `${match[1] ?? ''}${boldLabel(match[2] ?? '')}`
+}
+
+const FENCE = /^\s*(```|~~~)/
+const HEADING = /^(#{1,6}\s|\*\*[^*]+\*\*:?\s*$)/
+const TABLE = /^\s*\|/
+/** A line that opens a code block (a fence that does not close on the same line). */
+const opensFence = (line: string): boolean => {
+  const t = line.trim()
+  return FENCE.test(t) && !t.slice(3).includes(t.slice(0, 3))
+}
+
+/**
+ * Markdown the model wrote as an outline, read into blocks. Section headings (a `#` heading or a bold-only line)
+ * start a block; top-level bullets, paragraphs and tables are depth 2; anything indented under a bullet, with a
+ * code block nested there, is depth 3. Blank lines are dropped (lists are tight); a change of kind starts a new block.
+ */
+export function parseOutline(text: string): Block[] {
+  const blocks: Block[] = []
+  let block: Block | undefined
+  let kind = ''
+  let afterBlank = false
+  let isInFence = false
+  let fenceDepth: Depth = 2
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\s+$/, '')
+    if (isInFence) {
+      block?.push({ kind: 'md', depth: fenceDepth, text: line, isCode: true })
+      if (FENCE.test(line)) isInFence = false
+      continue
+    }
+    if (line.trim() === '') {
+      afterBlank = true
+      continue
+    }
+    const isNested = /^\s/.test(line) && kind === 'bullet'
+    const depth: Depth = isNested ? 3 : 2
+    const isFence = FENCE.test(line)
+    const k = isNested
+      ? kind
+      : isFence
+        ? 'code'
+        : HEADING.test(line)
+          ? 'heading'
+          : isBulletText(line)
+            ? 'bullet'
+            : TABLE.test(line)
+              ? 'table'
+              : 'para'
+    if (!isNested) {
+      const isSplit =
+        block === undefined || k === 'heading' || k === 'code' || (kind !== k && kind !== 'heading') || (k === 'para' && afterBlank)
+      if (isSplit) {
+        block = []
+        blocks.push(block)
+      }
+      kind = k
+    }
+    afterBlank = false
+    block?.push({ kind: 'md', depth, text: isFence ? line : boldBullet(line), isCode: isFence || undefined })
+    if (isFence && opensFence(line)) {
+      isInFence = true
+      fenceDepth = depth
+    }
+  }
+  return blocks
+}
+
+/** A question's `details` nested under `- **Details**:` (depth 3): a single plain line stays on the label's line. */
+function detailsLines(details: string): Line[] {
+  const rows = details.split('\n').filter(row => row.trim() !== '')
+  const only = rows.length === 1 ? rows[0] : undefined
+  if (only !== undefined && !isBulletText(only) && !FENCE.test(only)) {
+    return [{ kind: 'md', depth: 3, text: `- **Details**: ${only.trim()}` }]
+  }
+  const lines: Line[] = [{ kind: 'md', depth: 3, text: '- **Details**:' }]
+  let isInFence = false
+  for (const row of details.split('\n')) {
+    if (isInFence) {
+      lines.push({ kind: 'md', depth: 3, text: `  ${row}`, isCode: true })
+      if (FENCE.test(row)) isInFence = false
+      continue
+    }
+    if (row.trim() === '') continue
+    if (FENCE.test(row)) {
+      lines.push({ kind: 'md', depth: 3, text: `  ${row.trimEnd()}`, isCode: true })
+      isInFence = opensFence(row)
+      continue
+    }
+    const text = isBulletText(row) ? boldBullet(row) : /^\s/.test(row) ? row : `- ${boldLabel(row.trim())}`
+    lines.push({ kind: 'md', depth: 3, text: `  ${text.trimEnd()}` })
+  }
+  return lines
+}
+
+/** The whole reply as blocks, every depth: headline, questions, decisions, caveats, details, next, links. */
+export function buildBlocks(raw: unknown): Block[] {
   const reply = unescapeReply(normalizeReply(raw).reply)
-  const questions = reply.questions.filter(q => q.ask.trim() !== '' || q.verdict.trim() !== '')
-  const decisions = reply.decisions.filter(d => d.choice.trim() !== '' || d.pick.trim() !== '')
-  const links = reply.links.filter(l => l.label.trim() !== '' || l.path.trim() !== '')
-  const answer = (reply.answer ?? '').trim()
-  const parts: ReplyPart[] = []
-  const md = (text: string) => parts.push({ kind: 'markdown', text })
-  const linkPart = () => {
-    if (links.length > 0) parts.push({ kind: 'links', links, hasHeading: view !== 'tldr' })
+  const md = (depth: Depth, text: string): Line => ({ kind: 'md', depth, text })
+  const blocks: Block[] = []
+
+  const answer = (reply.answer ?? '').split('\n').filter(row => row.trim() !== '')
+  if (answer.length > 0) blocks.push(answer.map(row => md(1, boldLine(row.trimEnd()))))
+
+  for (const q of reply.questions) {
+    if (q.ask.trim() === '' && q.verdict.trim() === '') continue
+    const ask = q.ask.trim() === '' ? '' : `**${oneLine(q.ask)}**`
+    const block: Block = [md(1, [ask, oneLine(q.verdict)].filter(part => part !== '').join(' '))]
+    if (q.why.trim() !== '') block.push(md(2, `- **Why**: ${oneLine(q.why)}`))
+    if (q.details.trim() !== '') block.push(...detailsLines(q.details))
+    blocks.push(block)
   }
 
-  if (view === 'tldr') {
-    if (answer !== '') md(boldBlock(answer))
-    else if (questions.length > 0) md(questions.map(q => `- ${q.verdict.trim()}`).join('\n'))
-    for (const decision of decisions) parts.push({ kind: 'decision', decision, view })
-    linkPart()
-    return parts
+  for (const d of reply.decisions) {
+    if (d.choice.trim() === '' && d.pick.trim() === '') continue
+    const choice = d.choice.trim() === '' ? '' : `**${oneLine(d.choice)}**`
+    const block: Block = [md(1, [choice, oneLine(d.pick)].filter(part => part !== '').join(' '))]
+    // The recommended option leads; the others keep their order.
+    const ordered = [...d.options.filter(o => o.stance === 'recommended'), ...d.options.filter(o => o.stance !== 'recommended')]
+    for (const option of ordered) block.push({ kind: 'option', depth: 2, option })
+    blocks.push(block)
   }
 
-  if (answer !== '') md(boldBlock(answer))
-  // A blank line between questions makes the list loose, so each one stands apart; the numbering still runs on.
-  if (questions.length > 0) md(questions.map((q, i) => renderQuestion(q, i, view)).join('\n\n'))
-  for (const decision of decisions) parts.push({ kind: 'decision', decision, view })
   const caveats = reply.caveats.filter(c => c.trim() !== '')
-  if (caveats.length > 0) md(caveats.map(c => `⚠ ${c.trim()}`).join(BREAK))
-  if (reply.next.trim() !== '') md(`→ ${reply.next.trim()}`)
-  linkPart()
-  if (view === 'full' && reply.details.trim() !== '') md(reply.details.trim())
-  return parts
+  if (caveats.length > 0) blocks.push(caveats.map(c => md(2, `⚠ ${oneLine(c)}`)))
+
+  if (reply.details.trim() !== '') blocks.push(...parseOutline(reply.details))
+
+  if (reply.next.trim() !== '') blocks.push([md(2, `→ ${oneLine(reply.next)}`)])
+
+  const links = reply.links.filter(l => l.label.trim() !== '' || l.path.trim() !== '')
+  if (links.length > 0) {
+    blocks.push([md(2, '**Links**'), ...links.map((link): Line => ({ kind: 'link', depth: 1, link }))])
+  }
+  return blocks
 }
 
-/** One part as markdown. */
-export function partMarkdown(part: ReplyPart): string {
-  if (part.kind === 'markdown') return part.text
-  if (part.kind === 'decision') return renderDecision(part.decision, part.view)
-  // `*` bullets: a `-` list would merge with the decision options above it.
-  const list = part.links.map(link => `* ${renderLink(link)}`).join('\n')
-  return part.hasHeading ? `**Links**\n\n${list}` : list
+/** The blocks a view shows: the lines at or above its depth, and no block left empty. */
+export function viewBlocks(raw: unknown, view: ReplyView): Block[] {
+  const depth = DEPTH[view]
+  return buildBlocks(raw)
+    .map(block => block.filter(line => line.depth <= depth))
+    .filter(block => block.length > 0)
 }
 
-/** The reply as one markdown string for a view. */
+/** One line as markdown. */
+export function lineMarkdown(line: Line): string {
+  if (line.kind === 'md') return line.text
+  if (line.kind === 'link') return `- ${renderLink(line.link)}`
+  const { option } = line
+  const tag = option.stance === 'recommended' ? `${RECOMMENDED_TAG} ` : ''
+  return `- ${tag}**${escapeMarkdown(oneLine(option.name))}**: ${oneLine(option.consequence)}`
+}
+
+/**
+ * A run of lines as markdown, one per row. A plain line followed by another plain line gets a hard break so
+ * the renderer keeps them apart; a list item, an indented line, a table row or code needs none.
+ */
+export function joinMarkdown(lines: Line[]): string {
+  const isPlain = (line: Line | undefined): boolean => {
+    if (line === undefined || line.kind !== 'md' || line.isCode === true) return false
+    const t = line.text
+    return !isBulletText(t) && !/^\s/.test(t) && !TABLE.test(t) && !FENCE.test(t)
+  }
+  return lines.map((line, i) => (isPlain(line) && isPlain(lines[i + 1]) ? `${lineMarkdown(line)}  ` : lineMarkdown(line))).join('\n')
+}
+
+/** The reply as one markdown string for a view: blocks separated by one blank line. */
 export const renderReply = (raw: unknown, view: ReplyView): string =>
-  replyParts(raw, view).map(partMarkdown).join('\n\n')
+  viewBlocks(raw, view).map(joinMarkdown).join('\n\n')
 
 /** What a rejected call tells the model: the count and every issue, word for word. */
 export function rejectionText(issues: readonly string[]): string {
@@ -637,13 +753,13 @@ export function formatStats(stats: Stats, setting: Setting): string {
 
 /** One short worked example; it passes its own validator. */
 export const WORKED_EXAMPLE = {
-  answer: 'Good news on checkout, with one open dependency.',
+  answer: 'Checkout is fixed; one call needed on the release date.',
   questions: [
     {
       ask: 'Does checkout still fail on Safari?',
       verdict: 'No, the failure rate fell from 4% to 0.1%.',
       why: 'The retry now covers the timeout path.',
-      details: 'Fix: retry wrapper in `checkout/pay.ts` (MR !441).',
+      details: '- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441',
     },
     { ask: 'Can we ship Friday?', verdict: 'Yes, if QA signs off by Thursday.' },
   ],
@@ -652,13 +768,15 @@ export const WORKED_EXAMPLE = {
       choice: 'Ship Friday or wait a week?',
       pick: 'Ship Friday, the risk is low.',
       options: [
+        { name: 'Wait a week', consequence: 'One more regression pass.', stance: 'option' },
         { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', stance: 'recommended' },
-        { name: 'Wait a week', consequence: 'One more full regression pass.', stance: 'option' },
-        { name: 'Skip QA', consequence: 'Ships today, with no regression check.', stance: 'not_recommended' },
+        { name: 'Skip QA', consequence: 'Ships today with no regression check.', stance: 'not_recommended' },
       ],
     },
   ],
   caveats: ['Safari 16 was not tested.'],
+  details:
+    '**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00\n\n**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours',
   next: 'Want me to draft the QA sign-off request?',
   links: [{ label: 'Test report', path: '/home/me/reports/checkout.html' }],
 } as const
@@ -671,7 +789,8 @@ const RULES = [
   '3. Each block is a verdict plus 1-2 sentences, with the number kept.',
   '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict.',
   '5. Decisions are numbered calls with your pick; a caveat appears only when it changes a decision.',
-  '6. Every decision option has a stance: recommended (your pick, exactly one, drawn green), option (a normal alternative, blue) or not_recommended (listed for completeness, not advised, red).',
+  '6. `details` is an outline: bold section headings, top-level bullets as `**Label**: one line`, and deeper material as nested bullets. exec draws headings and top-level bullets, full draws everything.',
+  '7. Every decision option has a stance: recommended (your pick, exactly one, drawn green), option (a normal alternative, blue) or not_recommended (listed for completeness, not advised, red).',
 ]
 
 const EXAMPLE = `Example of a reply to two questions and one decision:\n${JSON.stringify(WORKED_EXAMPLE)}`
