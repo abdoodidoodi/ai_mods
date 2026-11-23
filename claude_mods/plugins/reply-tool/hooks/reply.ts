@@ -304,7 +304,9 @@ function scanField(field: string, text: string): string[] {
   return issues
 }
 
-const isAbsolutePath = (path: string): boolean => path.startsWith('/')
+const isWindowsDrivePath = (path: string): boolean => /^[A-Za-z]:[\\/]/.test(path)
+const isUncPath = (path: string): boolean => /^\\\\[^\\/]+[\\/]+[^\\/]/.test(path)
+const isAbsolutePath = (path: string): boolean => path.startsWith('/') || isWindowsDrivePath(path) || isUncPath(path)
 const isWebUrl = (path: string): boolean => /^https?:\/\/\S/i.test(path)
 
 /** The validation issues of a reply, in field order; an empty list is a clean reply. */
@@ -386,11 +388,19 @@ const webUrl = (url: string): string =>
 
 /** `file://` URL of an absolute path, percent-encoded where a path would break a URL or a markdown link. */
 export function fileUrl(path: string): string {
-  const encoded = path
-    .split('/')
-    .map(part => encodeURIComponent(part).replace(/\(/g, '%28').replace(/\)/g, '%29'))
-    .join('/')
-  return `file://${encoded}`
+  const encode = (parts: string[]): string =>
+    parts.map(part => encodeURIComponent(part).replace(/\(/g, '%28').replace(/\)/g, '%29')).join('/')
+  if (isWindowsDrivePath(path)) {
+    // `C:\Users\me` -> `file:///C:/Users/me`; the drive colon stays literal.
+    const rest = path.slice(2).split(/[\\/]+/).filter(part => part !== '')
+    return `file:///${path.slice(0, 2)}/${encode(rest)}`
+  }
+  if (isUncPath(path)) {
+    // `\\server\share\a b` -> `file://server/share/a%20b`
+    const [host = '', ...rest] = path.split(/[\\/]+/).filter(part => part !== '')
+    return `file://${encodeURIComponent(host)}/${encode(rest)}`
+  }
+  return `file://${encode(path.split('/'))}`
 }
 
 /**
@@ -425,9 +435,38 @@ function renderDecision(decision: ReplyDecision): string {
   return [head, ...options].join('\n')
 }
 
+/**
+ * A field the model wrote with literal `\n`, `\r\n` or `\t` escapes and no real line break gets real ones.
+ * Inline code spans are left as written; a field that already has a real newline is left alone.
+ */
+export function unescapeBreaks(text: string): string {
+  if (/[\r\n]/.test(text) || !/\\[nrt]/.test(text)) return text
+  return text
+    .split(/(`[^`]*`)/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/\\r\\n|\\n|\\r/g, '\n').replace(/\\t/g, '\t')))
+    .join('')
+}
+
+function unescapeReply(reply: Reply): Reply {
+  const u = unescapeBreaks
+  return {
+    answer: reply.answer === undefined ? undefined : u(reply.answer),
+    questions: reply.questions.map(q => ({ ask: u(q.ask), verdict: u(q.verdict), why: u(q.why), details: u(q.details) })),
+    decisions: reply.decisions.map(d => ({
+      choice: u(d.choice),
+      pick: u(d.pick),
+      options: d.options.map(o => ({ ...o, name: u(o.name), consequence: u(o.consequence) })),
+    })),
+    caveats: reply.caveats.map(u),
+    next: u(reply.next),
+    links: reply.links,
+    details: u(reply.details),
+  }
+}
+
 /** The reply as one markdown string for a view (tldr, exec, or full: exec plus each why and details). */
 export function renderReply(raw: unknown, view: ReplyView): string {
-  const { reply } = normalizeReply(raw)
+  const reply = unescapeReply(normalizeReply(raw).reply)
   const questions = reply.questions.filter(q => q.ask.trim() !== '' || q.verdict.trim() !== '')
   const decisions = reply.decisions.filter(d => d.choice.trim() !== '' || d.pick.trim() !== '')
   const links = reply.links.filter(l => l.label.trim() !== '' || l.path.trim() !== '')
@@ -588,7 +627,7 @@ const RULES = [
 const EXAMPLE = `Example of a reply to two questions and one decision:\n${JSON.stringify(WORKED_EXAMPLE)}`
 
 const DELIVERY =
-  'End every turn by calling `respond` with your reply; do not write the reply as plain text. If `respond` returns issues, fix them and call it again. After it returns `delivered`, end your turn without writing anything else. Only the main conversation uses `respond`; a subagent never calls it and reports in plain text.'
+  'String fields take real line breaks, never `\\n` escape sequences. End every turn by calling `respond` with your reply; do not write the reply as plain text. If `respond` returns issues, fix them and call it again. After it returns `delivered`, end your turn without writing anything else. Only the main conversation uses `respond`; a subagent never calls it and reports in plain text.'
 
 /** The system-prompt section `prompt.compose` adds while the mod is on: rules, schema, example, delivery rule. */
 export const CONTRACT = [

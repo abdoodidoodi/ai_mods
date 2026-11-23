@@ -111,6 +111,33 @@ test('a link label renders as text, and only an absolute path or an http(s) URL 
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual(['links[0].path should be an absolute path or an http(s) URL'])
 })
 
+test('Windows drive and UNC paths are accepted and drawn as file URLs', () => {
+  const links = [
+    { label: 'A', path: 'C:\\Users\\Me\\My Report.html' },
+    { label: 'B', path: 'C:/Users/Me/r(1).html' },
+    { label: 'C', path: '\\\\srv\\share\\a b.txt' },
+  ]
+  expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual([])
+  const out = renderReply({ answer: 'Done.', links }, 'tldr')
+  expect(out).toContain('[file:///C:/Users/Me/My%20Report.html](file:///C:/Users/Me/My%20Report.html)')
+  expect(out).toContain('(file:///C:/Users/Me/r%281%29.html)')
+  expect(out).toContain('(file://srv/share/a%20b.txt)')
+  expect(validateReply({ ...WORKED_EXAMPLE, links: [{ label: 'x', path: 'C:relative' }] })).toHaveLength(1)
+})
+
+test('literal backslash-n escapes become real line breaks, except in code spans or when real newlines exist', () => {
+  const answer = 'wmux (your app)\\n- Built by Codex:\\n  - sessions survive restarts;'
+  expect(renderReply({ answer }, 'full')).toBe('wmux (your app)\n- Built by Codex:\n  - sessions survive restarts;')
+  expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('a\nb\tc')
+  expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('Run `printf "a\\nb"`\nDone')
+  expect(renderReply({ answer: 'real\nbreak and literal \\n stay' }, 'full')).toBe('real\nbreak and literal \\n stay')
+  const full = renderReply({ answer: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
+  expect(full).toContain('   x\n   y')
+  expect(full.endsWith('p\nq')).toBe(true)
+  // A Windows path in a link is never touched.
+  expect(renderReply({ answer: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('file:///C:/new/tmp.html')
+})
+
 // What the engine's own turn.step and ui.render would answer, counted so a test sees when they are reached.
 const engine = { steps: 0 }
 const registered: { isDeferred: boolean | undefined; description: string }[] = []
