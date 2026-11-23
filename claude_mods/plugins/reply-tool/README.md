@@ -7,8 +7,8 @@ A Claude Code mod that makes Claude deliver every reply through a `respond` tool
 Long replies bury the answer. With reply-tool the answer comes first, and you decide how much of the rest you read:
 
 - `tldr`: the bold headline, one line per question (the question in bold, then the verdict), one line per decision (the choice in bold, then Claude's pick), and the links.
-- `exec`: tldr plus each question's `Why`, the options of each decision, the caveats, the section headings and top-level bullets of the details, the next step, and a `Links` heading.
-- `full`: exec plus each question's `Details` and the nested bullets of the details sections.
+- `exec`: tldr plus each question's reason headline (one bold line), the options of each decision, the caveats, the section headings and top-level bullets of the details, the next step, and a `Links` heading.
+- `full`: exec plus the rest of each question's reason bullet (the `details`: prose after the headline, lists nested under it) and the nested bullets of the details sections.
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
 
@@ -59,7 +59,7 @@ Every view has the same fixed block order: headline, questions, decisions, cavea
 | Element | tldr | exec adds | full adds |
 | --- | --- | --- | --- |
 | `answer` | bold headline | | |
-| each question | `**ask** verdict` | `- **Why**: ...` | `- **Details**: ...` (nested when a list) |
+| each question | `**ask** verdict` | `- **reason headline**` | the same bullet continues `: prose`, with the details' lists nested under it |
 | each decision | `**choice** pick` | the option bullets, recommended first | |
 | caveats | | `⚠ caveat`, one line each | |
 | `details` | | section headings, top-level bullets, paragraphs, tables | nested bullets and anything indented under a bullet |
@@ -70,6 +70,7 @@ Spacing and emphasis:
 
 - **One blank line between blocks,** none inside one: each question, each decision, the caveats, each details section, the next step and the links are separate blocks, and lists are tight.
 - **Bold before the colon.** Every bullet of the form `Label: text` (label up to 6 words, no backticks or URLs) has a bold label; the mod adds the bold when the model did not. A colon in a time such as `10:00`, or one not followed by a space, does not count.
+- **No generic labels.** A reason is never drawn as `**Why**:` or `**Details**:`. The `why` is a one-line headline that states the reason itself, and the `details` are the rest of that bullet. A question with `details` but no `why` draws the details in full as the question's own bullets. A `why` written before 0.1.8 with several sentences draws its first sentence as the headline and the rest as full-only detail, ahead of the old `details`.
 - **Options.** `- [Recommended] **Name**: consequence` for the recommended option, always first, then the others in their given order as `- **Name**: consequence`.
 - **Option colors (terminal only).** `[Recommended]` and the name of the recommended option are green, `option` names blue, `not_recommended` names red. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. Each decision has exactly one `recommended` option.
 - **Links show just their label,** as a clickable link: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown. They are always the last block.
@@ -97,8 +98,9 @@ The same reply, as Claude sends it:
     {
       "ask": "Does checkout still fail on Safari?",
       "verdict": "No, the failure rate fell from 4% to 0.1%.",
-      "why": "The retry now covers the timeout path.",
-      "details": "- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441"
+      "why": "The retry now covers the timeout path",
+      "details": "The timeout path was the only one that dropped the session.
+- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441"
     },
     {
       "ask": "Can we ship Friday?",
@@ -162,7 +164,7 @@ Drawn at `exec`:
 **Checkout is fixed; one call needed on the release date.**
 
 **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
-- **Why**: The retry now covers the timeout path.
+- **The retry now covers the timeout path**
 
 **Can we ship Friday?** Yes, if QA signs off by Thursday.
 
@@ -186,14 +188,13 @@ Drawn at `exec`:
 - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `full`: `exec` plus the question's `Details` and the nested bullets under Canary and Old sessions:
+Drawn at `full`: `exec` plus the rest of the question's reason bullet and the nested bullets under Canary and Old sessions:
 
 ```
 **Checkout is fixed; one call needed on the release date.**
 
 **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
-- **Why**: The retry now covers the timeout path.
-- **Details**:
+- **The retry now covers the timeout path**: The timeout path was the only one that dropped the session.
   - **Fix**: retry wrapper in `checkout/pay.ts`
   - MR !441
 
@@ -237,8 +238,8 @@ The `respond` tool takes one JSON object. Only `answer` is required.
 | `questions` | array | One entry per question you asked, in your order, at most 5. Omitted when you asked one question. |
 | `questions[].ask` | string | Your question in your words, at most 12 words. Required. |
 | `questions[].verdict` | string | One sentence: the verdict first, then the number or effect. No ids, paths, URLs or code. Required. |
-| `questions[].why` | string | Optional: at most 2 sentences of support. Drawn in `exec` and `full`. |
-| `questions[].details` | string | Optional: evidence, mechanics, ticket ids, file paths, best written as bullets. Drawn in `full`. |
+| `questions[].why` | string | Optional: ONE line that states the reason itself, written as a headline (about 14 words at most, one sentence, no colon; never a label such as "Why"). Drawn bold as the question's bullet in `exec` and `full`. |
+| `questions[].details` | string | Optional, `full` only: the rest of the `why` bullet. Leading prose follows the headline as `: prose`; any list nests under the bullet. Without a `why`, drawn as the question's own bullets. |
 | `decisions` | array | Only when you must choose. One entry per choice. |
 | `decisions[].choice` | string | The decision, phrased as a question. Required. |
 | `decisions[].pick` | string | One line: what Claude recommends and why. Required. |
@@ -251,7 +252,8 @@ The `respond` tool takes one JSON object. Only `answer` is required.
 The tool checks, and rejects with the exact issues:
 
 - a missing `answer`, or an empty one with no questions
-- more than 2 sentences in `answer` or `why`, more than 1 in a `verdict`
+- more than 2 sentences in `answer`, more than 1 in a `verdict` or `why`
+- a `why` that is a generic label ("Why", "Because", "Reason", "Details", or one ending in a colon) or contains a colon
 - exactly 1 question (it belongs in `answer`), or more than 5
 - more than 2 caveats
 - a decision with fewer than 2 options, an option with no valid `stance`, or not exactly one `recommended`

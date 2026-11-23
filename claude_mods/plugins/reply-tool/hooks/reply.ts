@@ -48,10 +48,15 @@ export const REPLY_SCHEMA = {
             type: 'string',
             description: 'ONE sentence: the verdict first, then the number or effect. No ids, paths, URLs or code.',
           },
-          why: { type: 'string', description: 'Optional, at most 2 sentences of support.' },
+          why: {
+            type: 'string',
+            description:
+              'Optional: ONE line that states the reason itself, written as a headline (at most about 14 words, one sentence, no colon). Never a label such as "Why" or "Reason". Drawn bold as the bullet under the question, in exec and full.',
+          },
           details: {
             type: 'string',
-            description: 'Optional, drawn in full only: evidence, mechanics, MR/ticket ids, file paths. Write it as bullets, `- **Label**: one line`, nesting deeper material.',
+            description:
+              'Optional, drawn in full only: the rest of the why bullet. Leading prose goes after the headline on the same bullet; any list nests under it as `- **Label**: one line` bullets. Evidence, mechanics, MR/ticket ids, file paths.',
           },
         },
       },
@@ -322,6 +327,8 @@ const isUncPath = (path: string): boolean => /^\\\\[^\\/]+[\\/]+[^\\/]/.test(pat
 const isAbsolutePath = (path: string): boolean => path.startsWith('/') || isWindowsDrivePath(path) || isUncPath(path)
 const isWebUrl = (path: string): boolean => /^https?:\/\/\S/i.test(path)
 
+const GENERIC_WHY = ['why', 'because', 'reason', 'reasons', 'the reason', 'details', 'detail']
+
 /** The validation issues of a reply, in field order; an empty list is a clean reply. */
 export function validateReply(raw: unknown): string[] {
   const { reply, problems } = normalizeReply(raw)
@@ -345,7 +352,16 @@ export function validateReply(raw: unknown): string[] {
   reply.questions.forEach((question, i) => {
     sentences(`questions[${i}].verdict`, question.verdict, 1)
     issues.push(...scanField(`questions[${i}].verdict`, question.verdict))
-    sentences(`questions[${i}].why`, question.why, 2)
+    const why = oneLine(question.why)
+    if (why !== '') {
+      const bare = why.replace(/[\s:.!?-]+$/, '').toLowerCase()
+      if (GENERIC_WHY.includes(bare) || /:\s*$/.test(why)) {
+        issues.push(`questions[${i}].why is a generic label ("${why}"): write the reason itself as a one-line headline`)
+      } else if (/:\s/.test(why)) {
+        issues.push(`questions[${i}].why has a colon: write one headline sentence that states the reason`)
+      }
+      sentences(`questions[${i}].why`, why, 1)
+    }
   })
 
   reply.decisions.forEach((decision, i) => {
@@ -476,7 +492,7 @@ export type Depth = 1 | 2 | 3
 export const DEPTH: Record<ReplyView, Depth> = { tldr: 1, exec: 2, full: 3 }
 
 export type Line =
-  | { kind: 'md'; depth: Depth; text: string; isCode?: boolean }
+  | { kind: 'md'; depth: Depth; text: string; isCode?: boolean; extend?: string }
   | { kind: 'option'; depth: Depth; option: ReplyOption }
   | { kind: 'link'; depth: Depth; link: ReplyLink }
 export type Block = Line[]
@@ -568,29 +584,60 @@ export function parseOutline(text: string): Block[] {
   return blocks
 }
 
-/** A question's `details` nested under `- **Details**:` (depth 3): a single plain line stays on the label's line. */
-function detailsLines(details: string): Line[] {
-  const rows = details.split('\n').filter(row => row.trim() !== '')
-  const only = rows.length === 1 ? rows[0] : undefined
-  if (only !== undefined && !isBulletText(only) && !FENCE.test(only)) {
-    return [{ kind: 'md', depth: 3, text: `- **Details**: ${only.trim()}` }]
+/** The first sentence of a text, and the rest ("" when it is one sentence). */
+export function splitFirstSentence(text: string): [string, string] {
+  const trimmed = oneLine(text)
+  const masked = trimmed.replace(ABBREVIATION, '$1$2․')
+  const match = /[.!?](?=\s+[A-Z0-9])/.exec(masked)
+  if (match === null) return [trimmed, '']
+  const cut = match.index + 1
+  return [trimmed.slice(0, cut).trim(), trimmed.slice(cut).trim()]
+}
+
+/** A headline as drawn: one line, no trailing full stop. */
+const headlineText = (text: string): string => oneLine(text).replace(/\.+$/, '')
+
+/**
+ * A question's supporting bullet. `why` is the headline (always drawn from exec on, bold); `details` is the rest of
+ * that bullet, full only: its leading prose follows the headline as `: prose`, its lists nest under it. An old
+ * multi-sentence `why` gives its first sentence as the headline and the rest as leading prose. With no `why`, full
+ * draws the details as the question's own bullets.
+ */
+function supportLines(why: string, details: string): Line[] {
+  const all = details.split('\n')
+  const lines: Line[] = []
+  const [headline, oldRest] = splitFirstSentence(why)
+  const hasHead = headline !== ''
+  // Leading prose: the non-blank rows before the first bullet, fence or indented row.
+  const isListRow = (row: string): boolean => isBulletText(row) || FENCE.test(row) || /^\s/.test(row)
+  let at = 0
+  const proseRows: string[] = []
+  if (hasHead) {
+    while (at < all.length && !isListRow(all[at] ?? '')) {
+      if ((all[at] ?? '').trim() !== '') proseRows.push((all[at] ?? '').trim())
+      at += 1
+    }
   }
-  const lines: Line[] = [{ kind: 'md', depth: 3, text: '- **Details**:' }]
+  const prose = [oldRest, ...proseRows].filter(part => part !== '').join(' ')
+  const indent = hasHead ? '  ' : ''
+  if (hasHead) {
+    lines.push({ kind: 'md', depth: 2, text: `- **${headlineText(headline)}**`, ...(prose === '' ? {} : { extend: `: ${prose}` }) })
+  }
   let isInFence = false
-  for (const row of details.split('\n')) {
+  for (const row of all.slice(at)) {
     if (isInFence) {
-      lines.push({ kind: 'md', depth: 3, text: `  ${row}`, isCode: true })
+      lines.push({ kind: 'md', depth: 3, text: `${indent}${row}`, isCode: true })
       if (FENCE.test(row)) isInFence = false
       continue
     }
     if (row.trim() === '') continue
     if (FENCE.test(row)) {
-      lines.push({ kind: 'md', depth: 3, text: `  ${row.trimEnd()}`, isCode: true })
+      lines.push({ kind: 'md', depth: 3, text: `${indent || '  '}${row.trimEnd()}`, isCode: true })
       isInFence = opensFence(row)
       continue
     }
     const text = isBulletText(row) ? boldBullet(row) : /^\s/.test(row) ? row : `- ${boldLabel(row.trim())}`
-    lines.push({ kind: 'md', depth: 3, text: `  ${text.trimEnd()}` })
+    lines.push({ kind: 'md', depth: 3, text: `${indent}${text.trimEnd()}` })
   }
   return lines
 }
@@ -608,8 +655,7 @@ export function buildBlocks(raw: unknown): Block[] {
     if (q.ask.trim() === '' && q.verdict.trim() === '') continue
     const ask = q.ask.trim() === '' ? '' : `**${oneLine(q.ask)}**`
     const block: Block = [md(1, [ask, oneLine(q.verdict)].filter(part => part !== '').join(' '))]
-    if (q.why.trim() !== '') block.push(md(2, `- **Why**: ${oneLine(q.why)}`))
-    if (q.details.trim() !== '') block.push(...detailsLines(q.details))
+    if (q.why.trim() !== '' || q.details.trim() !== '') block.push(...supportLines(q.why, q.details))
     blocks.push(block)
   }
 
@@ -640,8 +686,11 @@ export function buildBlocks(raw: unknown): Block[] {
 /** The blocks a view shows: the lines at or above its depth, and no block left empty. */
 export function viewBlocks(raw: unknown, view: ReplyView): Block[] {
   const depth = DEPTH[view]
+  // A bullet head with an `extend` grows into its full form in full only.
+  const shown = (line: Line): Line =>
+    line.kind === 'md' && line.extend !== undefined && depth >= 3 ? { ...line, text: line.text + line.extend, extend: undefined } : line
   return buildBlocks(raw)
-    .map(block => block.filter(line => line.depth <= depth))
+    .map(block => block.filter(line => line.depth <= depth).map(shown))
     .filter(block => block.length > 0)
 }
 
@@ -787,7 +836,7 @@ const RULES = [
   '1. Answer first: the bottom line comes before anything else.',
   '2. One block per question THE USER asked, in their order, labelled with their question.',
   '3. Each block is a verdict plus 1-2 sentences, with the number kept.',
-  '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict.',
+  '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict. The `why` of a question is one line that states the reason itself (a headline of at most about 14 words, no colon), never a label like "Why"; its `details` are the rest of that bullet, shown in full only: prose after the headline, lists nested under it.',
   '5. Decisions are numbered calls with your pick; a caveat appears only when it changes a decision.',
   '6. `details` is an outline: bold section headings, top-level bullets as `**Label**: one line`, and deeper material as nested bullets. exec draws headings and top-level bullets, full draws everything.',
   '7. Every decision option has a stance: recommended (your pick, exactly one, drawn green), option (a normal alternative, blue) or not_recommended (listed for completeness, not advised, red).',

@@ -14,8 +14,8 @@ const SAMPLE = {
     {
       ask: 'Does checkout still fail on Safari?',
       verdict: 'No, the failure rate fell from 4% to 0.1%.',
-      why: 'The retry now covers the timeout path.',
-      details: '- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441',
+      why: 'The retry now covers the timeout path',
+      details: 'The timeout path was the only one that dropped the session.\n- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441',
     },
     { ask: 'Can we ship Friday?', verdict: 'Yes, if QA signs off by Thursday.' },
   ],
@@ -47,6 +47,7 @@ const SAMPLE = {
 
 const HEAD = '**Checkout is fixed; one call needed on the release date.**'
 const Q1 = '**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
+const WHY = '- **The retry now covers the timeout path**'
 const Q2 = '**Can we ship Friday?** Yes, if QA signs off by Thursday.'
 const D1 = '**Ship Friday or wait a week?** Ship Friday, the risk is low.'
 const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
@@ -61,7 +62,7 @@ const TLDR = [HEAD, Q1, Q2, D1, LINK].join('\n\n')
 
 const EXEC = [
   HEAD,
-  [Q1, '- **Why**: The retry now covers the timeout path.'].join('\n'),
+  [Q1, WHY].join('\n'),
   Q2,
   DECISION,
   '⚠ Safari 16 was not tested.',
@@ -75,8 +76,7 @@ const FULL = [
   HEAD,
   [
     Q1,
-    '- **Why**: The retry now covers the timeout path.',
-    '- **Details**:',
+    WHY + ': The timeout path was the only one that dropped the session.',
     '  - **Fix**: retry wrapper in `checkout/pay.ts`',
     '  - MR !441',
   ].join('\n'),
@@ -109,12 +109,13 @@ test('the fixture renders as exactly this markdown in tldr, exec and full', () =
 })
 
 test('the views are one outline: every line of tldr is in exec, and of exec in full, in order; links come last', () => {
+  // A bullet head may grow in the bigger view: its full form starts with the smaller view's line.
   const inOrder = (small: string[], big: string[]) => {
     let at = 0
     for (const line of small) {
-      at = big.indexOf(line, at)
-      expect(at, line).toBeGreaterThanOrEqual(0)
-      at += 1
+      const found = big.findIndex((b, i) => i >= at && (b === line || b.startsWith(line + ': ')))
+      expect(found, line).toBeGreaterThanOrEqual(0)
+      at = found + 1
     }
   }
   const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(SAMPLE, view)))
@@ -207,6 +208,44 @@ test('validation flags a bare id and a two-sentence verdict, and passes the work
   expect(validateReply({})).toEqual(['answer is missing'])
 })
 
+const why1 = (question: Record<string, unknown>) => ({ answer: 'A.', questions: [{ ask: 'Q?', verdict: 'V.', ...question }, { ask: 'R?', verdict: 'W.' }] })
+
+test('why is one line that states the reason: a generic label, a colon or a second sentence is rejected', () => {
+  expect(validateReply(why1({ why: 'JSON fails loudly; YAML can change values silently' }))).toEqual([])
+  for (const label of ['Why', 'why:', 'Because', 'Reason.', 'Details', 'The reason']) {
+    expect(validateReply(why1({ why: label })), label).toEqual([`questions[0].why is a generic label ("${label}"): write the reason itself as a one-line headline`])
+  }
+  expect(validateReply(why1({ why: 'Because of this:' }))).toHaveLength(1)
+  expect(validateReply(why1({ why: 'Reason: it is faster' }))).toEqual(['questions[0].why has a colon: write one headline sentence that states the reason'])
+  expect(validateReply(why1({ why: 'It is faster. It is also safer.' }))).toEqual(['questions[0].why has 2 sentences (max 1)'])
+  expect(validateReply(why1({ why: 'Meets at 10:00 sharp' }))).toEqual([])
+})
+
+test('details without a why are the questions own bullets in full only; with a why, prose follows the headline and lists nest', () => {
+  const noWhy = why1({ details: 'Some prose.\n- **Pick**: JSON\n  - nested\n- plain' })
+  expect(renderReply(noWhy, 'exec')).toBe('**A.**\n\n**Q?** V.\n\n**R?** W.')
+  expect(renderReply(noWhy, 'full')).toBe('**A.**\n\n**Q?** V.\n- Some prose.\n- **Pick**: JSON\n  - nested\n- plain\n\n**R?** W.')
+  const both = why1({ why: 'JSON fails loudly', details: 'No coercion traps.\n- **Pick JSON when**: machines write it\n- Pick YAML when: humans edit it' })
+  expect(renderReply(both, 'exec')).toBe('**A.**\n\n**Q?** V.\n- **JSON fails loudly**\n\n**R?** W.')
+  expect(renderReply(both, 'full')).toBe(
+    '**A.**\n\n**Q?** V.\n- **JSON fails loudly**: No coercion traps.\n  - **Pick JSON when**: machines write it\n  - **Pick YAML when**: humans edit it\n\n**R?** W.',
+  )
+})
+
+test('an old multi-sentence why draws its first sentence as the headline, the rest then the old details in full only', () => {
+  const old = why1({ why: 'The retry covers the timeout path. It was the only gap, e.g. 5 files.', details: '- Fix: wrapper' })
+  expect(renderReply(old, 'exec')).toContain('**Q?** V.\n- **The retry covers the timeout path**\n')
+  expect(renderReply(old, 'full')).toContain('- **The retry covers the timeout path**: It was the only gap, e.g. 5 files.\n  - **Fix**: wrapper')
+})
+
+test('no generic Why or Details label is ever drawn, in any view', () => {
+  for (const input of [SAMPLE, why1({ why: 'Short reason', details: 'x' }), why1({ details: 'x\n- y' }), why1({ why: 'A. B.', details: '- c' })]) {
+    for (const view of ['tldr', 'exec', 'full'] as const) {
+      expect(renderReply(input, view)).not.toMatch(/\*\*(Why|Details)\*\*/i)
+    }
+  }
+})
+
 test('links draw as just the label: [label](url), no path text; only an absolute path or an http(s) URL is a link', () => {
   const links = [
     { label: '[Docs](https://evil.example)', path: 'javascript:alert(1)' },
@@ -244,7 +283,7 @@ test('literal backslash-n escapes become real line breaks, except in code spans 
   expect(renderReply({ answer: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**  \n**b\tc**')
   expect(renderReply({ answer: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**  \n**Done**')
   const full = renderReply({ answer: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
-  expect(full).toContain('- **Details**:\n  - x\n  - y')
+  expect(full).toContain('**Q?** V.\n- x\n- y')
   expect(full.endsWith('p  \nq')).toBe(true)
   // A Windows path in a link is never touched.
   expect(renderReply({ answer: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
@@ -273,8 +312,9 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   expect(markdown).not.toContain('file:///')
   expect(markdown).not.toContain('Decision')
   expect(JSON.stringify(await ui.drawn())).not.toContain('cyan')
-  expect(markdown.includes('- **Why**')).toBe(view !== 'tldr')
-  expect(markdown.includes('- **Details**:')).toBe(view === 'full')
+  expect(markdown.includes(WHY)).toBe(view !== 'tldr')
+  expect(markdown.includes(WHY + ': The timeout path was')).toBe(view === 'full')
+  expect(markdown).not.toMatch(/\*\*(Why|Details)\*\*/)
   expect(markdown.includes('  - Watch the error dashboard')).toBe(view === 'full')
   const props = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern }))?.props
   if (view === 'tldr') {
