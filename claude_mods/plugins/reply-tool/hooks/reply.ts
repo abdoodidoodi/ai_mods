@@ -18,8 +18,8 @@ export function parseSetting(args: string | undefined): Setting | undefined {
   return word === 'off' || word === 'tldr' || word === 'exec' || word === 'full' ? word : undefined
 }
 
-/** The bottom-bar indicator: `reply: exec` while on; undefined (which clears it) while off. */
-export const indicatorText = (setting: Setting): string | undefined => (setting === 'off' ? undefined : `reply: ${setting}`)
+/** The bottom-bar indicator: `exec` while on; undefined (which clears it) while off. */
+export const indicatorText = (setting: Setting): string | undefined => (setting === 'off' ? undefined : setting)
 
 export const viewOf = (setting: Setting): ReplyView => (setting === 'off' ? 'full' : setting)
 

@@ -60,7 +60,7 @@ What each view shows:
 
 In every view the bottom line is bold and a blank line separates each block (answer, questions, decisions, caveats, next step, links), so nothing runs into the next. There is no footer under a reply.
 
-While reply-tool is on, a small indicator under the prompt shows the view, for example `reply: exec` (the terminal draws it in the notice area just above `bypass permissions on`, as `⚠ reply-tool: reply: exec`). It is set with `$.ui.status`, the mod's own pinned status line, so it never touches the `statusLine` setting. It changes the moment `/reply` does and is gone while the mod is off. `/reply` still shows a toast when the setting changes.
+While reply-tool is on, a small indicator under the prompt shows the view, for example `exec` (the terminal draws it in the notice area just above `bypass permissions on`, as `⚠ reply-tool: exec`; Claude Code adds the prefix and glyph, and `$.ui.status` takes only text). It is set with `$.ui.status`, the mod's own pinned status line, so it never touches the `statusLine` setting. It changes the moment `/reply` does and is gone while the mod is off. `/reply` still shows a toast when the setting changes.
 
 A `respond` call the validator rejects draws nothing in the terminal: no row and no `respond rejected` line, live or when the transcript is redrawn or resumed. The model still reads the rejection text, and `/reply_stats` still counts it. Only the accepted call is drawn. Press `ctrl+o` on a reply to see the raw `respond` call, rejected ones included.
 

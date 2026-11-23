@@ -345,13 +345,13 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   const footer = async () => (await ui.find({ type: 'Text', text: /\/reply|·/ }))?.text
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'exec'))
   expect(await footer()).toBeUndefined()
-  expect(statuses.at(-1)).toBe('reply: exec')
+  expect(statuses.at(-1)).toBe('exec')
 
   expect((await run($, 'reply', 'tldr')).text).toContain('tldr')
   await ui.redraw()
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'tldr'))
   expect(await footer()).toBeUndefined()
-  expect(statuses.at(-1)).toBe('reply: tldr')
+  expect(statuses.at(-1)).toBe('tldr')
   expect(registered).toHaveLength(2)
 
   // full while on: the drawing only (the tool stays as registered), everything drawn, and an ON mod's footer, which offers off.
@@ -359,7 +359,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   await ui.redraw()
   expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
   expect(await footer()).toBeUndefined()
-  expect(statuses.at(-1)).toBe('reply: full')
+  expect(statuses.at(-1)).toBe('full')
   expect(registered).toHaveLength(2)
   expect((await run($, 'reply', 'full')).text).toBe('reply-tool is already set to full.')
   // An accepted reply that still has issues draws just the reply: no footer, no issue list.
@@ -381,7 +381,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
 
   // Turning it on from off needs nothing else: full turns it on like tldr and exec.
   expect((await run($, 'reply', 'full')).text).toContain('reply-tool is ON (full)')
-  expect(statuses.at(-1)).toBe('reply: full')
+  expect(statuses.at(-1)).toBe('full')
   expect(registered.at(-1)?.isDeferred).toBe(false)
   expect((await run($, 'reply_stats')).text).toContain('is set to full')
 })
@@ -413,7 +413,7 @@ test('the closing text is the marked reply at the view, and only a marked or bar
   expect(CLOSING_MATCHER.test('hello ​⁠​')).toBe(false)
 })
 
-test('the indicator reads reply: <setting> while on and nothing while off', () => {
+test('the indicator reads <setting> while on and nothing while off', () => {
   expect(indicatorText('off')).toBeUndefined()
-  for (const mode of ['tldr', 'exec', 'full'] as const) expect(indicatorText(mode)).toBe('reply: ' + mode)
+  for (const mode of ['tldr', 'exec', 'full'] as const) expect(indicatorText(mode)).toBe(mode)
 })
