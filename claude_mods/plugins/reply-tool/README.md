@@ -6,9 +6,11 @@ A Claude Code mod that makes Claude deliver every reply through a `respond` tool
 
 Long replies bury the answer. With reply-tool the answer comes first, and you decide how much of the rest you read:
 
-- `tldr`: the bold headline (the shortest possible answer, at most 8 words), one line per question (the question in bold, then the verdict), one line per decision (the choice in bold, then Claude's pick), and the links.
-- `exec`: tldr plus the summary (1 to 2 sentences of context, plain text directly under the headline), each question's reason headline (one bold line), the options of each decision, the caveats, the section headings and top-level bullets of the details, the next step, and a `Links` heading.
-- `full`: exec plus the rest of each question's reason bullet (the `details`: prose after the headline, lists nested under it) and the nested bullets of the details sections.
+Three views, for three readers:
+
+- `tldr` is for someone who wants fully autonomous execution without knowing how or why: only the shortest status updates towards progress. The bold headline (at most 8 words), the decisions (the choice in bold, then Claude's pick: the recommended option in at most 8 words), the next step, and the links. No verdicts, no options.
+- `exec` is for someone who also wants a say in the decisions, with very few whys to build each decision in their head. tldr plus the summary (1 to 2 sentences under the headline), one verdict line per question, each decision's options with their one-line consequences, the caveats, and a `Links` heading. No reasons, evidence or details.
+- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus each question's reason headline and its details, and the whole `details` outline.
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
 
@@ -52,20 +54,34 @@ reply-tool is off at the start of every session. Two commands:
   - `tldr`, `exec`, `full`: Claude ends each turn with the `respond` tool, and replies are drawn at that level.
 - `/reply_stats` shows counters kept across sessions: turns while enabled, replies delivered through `respond`, plain-text fallbacks, replies that still had a validation issue, first calls that passed validation, and rejections.
 
-What each view shows. The three views are one outline cut at three depths: every line of `tldr` is in `exec`, and every line of `exec` is in `full`, in the same order and styled the same. Lines only appear or disappear; nothing reorders. The only exception is the `Links` heading, which `tldr` leaves out.
+What each view shows. The three views are one outline cut at three levels: every line of `tldr` is in `exec`, and every line of `exec` is in `full`, in the same order and styled the same. Lines only appear or disappear; nothing reorders.
 
 Every view has the same fixed block order: headline and summary, questions, decisions, caveats, details sections, next step, links. Links are always last.
 
-| Element | tldr | exec adds | full adds |
-| --- | --- | --- | --- |
-| `headline` | bold headline | | |
-| `summary` | | plain text directly under the headline, same block | |
-| each question | `**ask** verdict` | `- **reason headline**` | the same bullet continues `: prose`, with the details' lists nested under it |
-| each decision | `**choice** pick` | the option bullets, recommended first | |
-| caveats | | `⚠ caveat`, one line each | |
-| `details` | | section headings, top-level bullets, paragraphs, tables | nested bullets and anything indented under a bullet |
-| `next` | | `→ next` | |
-| links | `- [label](url)` bullets | the same under a bold `Links` heading | |
+Every drawn line is one unit of a type, and one exported table, `LEVELS` in `hooks/reply.ts`, says which view first shows each type (1 = tldr, 2 = exec, 3 = full). Moving a type between views is a one-line edit there.
+
+| Unit | What it is | Level |
+| --- | --- | --- |
+| `headline` | the bold shortest answer | 1 (tldr) |
+| `summary` | the line under the headline | 2 (exec) |
+| `verdict` | a question's `**ask** verdict` line | 2 (exec) |
+| `reason` | a question's one-line bold reason bullet | 3 (full) |
+| `evidence` | a question's `details`, nested under the reason | 3 (full) |
+| `decision` | the `**choice** pick` line | 1 (tldr) |
+| `option` | `- [Recommended] **Name**: consequence` | 2 (exec) |
+| `caveat` | `⚠ caveat` | 2 (exec) |
+| `section` | a `details` outline heading | 3 (full) |
+| `bullet` | a `details` top-level bullet or paragraph | 3 (full) |
+| `subbullet` | a nested `details` bullet | 3 (full) |
+| `next` | `→ next` | 1 (tldr) |
+| `link` | each link | 1 (tldr) |
+| `linksHeading` | the bold heading above the links | 2 (exec) |
+
+A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (headline, then summary; verdict, then reason, then evidence; decision, then option; section, then bullet, then subbullet).
+
+Every view has the same fixed block order: headline and summary, questions, decisions, caveats, details sections, next step, links. Links are always last.
+
+Section icons. The first line of each block opens with an icon, so the eye can find a section: `●` the answer (before the bold headline; the summary under it has none), `◆` each question, `◇` each decision, `⚠` the caveats, `≡` each details section, `→` the next step, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 💬 🔀 ⚠️ 📋 ➡️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A `#` heading in the details is drawn as a bold line behind its icon; a details block that starts with a bullet takes the icon after the list marker, and one that starts with a table or code block gets none. The icons are part of the markdown, so the terminal and Desktop draw the same.
 
 Spacing and emphasis:
 
@@ -78,7 +94,7 @@ Spacing and emphasis:
 - **A blank line above every reply** in the terminal, between your prompt and the answer.
 - **No decision label, bar or blockquote:** a decision is a bold choice and the pick, followed by its options.
 
-Details are written as an outline: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. `exec` shows the headings and top-level bullets (and any paragraph or table); `full` shows everything, including a code block nested under a bullet.
+Details are written as an outline: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. They are drawn in `full`, including a code block nested under a bullet.
 
 Replies written before 0.1.9 have an `answer` and no `headline`: the `answer` is drawn as the headline, as it always was (the schema and the contract no longer offer `answer`, and the validator turns a new call that only has one away). Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
 
@@ -112,7 +128,7 @@ The same reply, as Claude sends it:
   "decisions": [
     {
       "choice": "Ship Friday or wait a week?",
-      "pick": "Ship Friday, the risk is low.",
+      "pick": "Ship Friday",
       "options": [
         {
           "name": "Wait a week",
@@ -149,13 +165,11 @@ The same reply, as Claude sends it:
 Drawn at `tldr`:
 
 ```
-**Checkout fixed; ship Friday**
+● **Checkout fixed; ship Friday**
 
-**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
+◇ **Ship Friday or wait a week?** Ship Friday
 
-**Can we ship Friday?** Yes, if QA signs off by Thursday.
-
-**Ship Friday or wait a week?** Ship Friday, the risk is low.
+→ Want me to draft the QA sign-off request?
 
 - [Test report](file:///home/me/reports/checkout.html)
 ```
@@ -163,66 +177,58 @@ Drawn at `tldr`:
 Drawn at `exec`:
 
 ```
-**Checkout fixed; ship Friday**  
+● **Checkout fixed; ship Friday**  
 The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
 
-**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
-- **The retry now covers the timeout path**
+◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
 
-**Can we ship Friday?** Yes, if QA signs off by Thursday.
+◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.
 
-**Ship Friday or wait a week?** Ship Friday, the risk is low.
+◇ **Ship Friday or wait a week?** Ship Friday
 - [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.
 - **Wait a week**: One more regression pass.
 - **Skip QA**: Ships today with no regression check.
 
 ⚠ Safari 16 was not tested.
-
-**Rollout**
-- **Canary**: 5% on Thursday
-- **Full**: Friday 10:00
-
-**Risks**
-- **Old sessions**: carts opened before the deploy keep the old code
 
 → Want me to draft the QA sign-off request?
 
-**Links**
+↗ **Links**
 - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `full`: `exec` plus the rest of the question's reason bullet and the nested bullets under Canary and Old sessions:
+Drawn at `full`: `exec` plus the question's reason bullet with its details, and the details sections:
 
 ```
-**Checkout fixed; ship Friday**  
+● **Checkout fixed; ship Friday**  
 The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
 
-**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
-- **The retry now covers the timeout path**: The timeout path was the only one that dropped the session.
+◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
+- **The retry now covers the timeout path**
   - **Fix**: retry wrapper in `checkout/pay.ts`
   - MR !441
 
-**Can we ship Friday?** Yes, if QA signs off by Thursday.
+◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.
 
-**Ship Friday or wait a week?** Ship Friday, the risk is low.
+◇ **Ship Friday or wait a week?** Ship Friday
 - [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.
 - **Wait a week**: One more regression pass.
 - **Skip QA**: Ships today with no regression check.
 
 ⚠ Safari 16 was not tested.
 
-**Rollout**
+≡ **Rollout**
 - **Canary**: 5% on Thursday
   - Watch the error dashboard for 2 hours
 - **Full**: Friday 10:00
 
-**Risks**
+≡ **Risks**
 - **Old sessions**: carts opened before the deploy keep the old code
   - They expire within 24 hours
 
 → Want me to draft the QA sign-off request?
 
-**Links**
+↗ **Links**
 - [Test report](file:///home/me/reports/checkout.html)
 ```
 
@@ -243,16 +249,16 @@ The `respond` tool takes one JSON object. Only `headline` is required.
 | `questions` | array | One entry per question you asked, in your order, at most 5. Omitted when you asked one question. |
 | `questions[].ask` | string | Your question in your words, at most 12 words. Required. |
 | `questions[].verdict` | string | One sentence: the verdict first, then the number or effect. No ids, paths, URLs or code. Required. |
-| `questions[].why` | string | Optional: ONE line that states the reason itself, written as a headline (about 14 words at most, one sentence, no colon; never a label such as "Why"). Drawn bold as the question's bullet in `exec` and `full`. |
+| `questions[].why` | string | Optional: ONE line that states the reason itself, written as a headline (about 14 words at most, one sentence, no colon; never a label such as "Why"). Drawn bold as the question's bullet in `full`. |
 | `questions[].details` | string | Optional, `full` only: the rest of the `why` bullet. Leading prose follows the headline as `: prose`; any list nests under the bullet. Without a `why`, drawn as the question's own bullets. |
 | `decisions` | array | Only when you must choose. One entry per choice. |
 | `decisions[].choice` | string | The decision, phrased as a question. Required. |
-| `decisions[].pick` | string | One line: what Claude recommends and why. Required. |
+| `decisions[].pick` | string | The recommended option in at most 8 words, with no reason (`Ship Friday`). The reason lives in the options' consequences. Required. |
 | `decisions[].options` | array | At least 2 entries of `name`, `consequence` (one line) and `stance` (`recommended`, `option` or `not_recommended`); exactly one is `recommended`. Required. |
 | `caveats` | array of strings | At most 2, one clause each, only when one changes a decision. |
 | `next` | string | A question or offer that reads on its own. |
 | `links` | array | Deliverables you open: `label` and `path` (an absolute path or an http(s) URL). Always drawn as the label alone, as a clickable link to the path or URL. |
-| `details` | string | Optional outline for everything else: bold section headings, top-level bullets as `**Label**: one line`, deeper material as nested bullets. `exec` draws the headings and top-level bullets, `full` everything. |
+| `details` | string | Optional outline for everything else: bold section headings, top-level bullets as `**Label**: one line`, deeper material as nested bullets. Drawn in `full` only. |
 
 The tool checks, and rejects with the exact issues:
 
@@ -260,6 +266,7 @@ The tool checks, and rejects with the exact issues:
 - more than 2 sentences in `summary`, more than 1 in a `verdict` or `why`
 - a `why` that is a generic label ("Why", "Because", "Reason", "Details", or one ending in a colon) or contains a colon
 - exactly 1 question (it belongs in `headline`), or more than 5
+- a decision `pick` of more than 8 words (the message says: name the recommended option in at most 8 words, no reason; the reason lives in the options' consequences)
 - more than 2 caveats
 - a decision with fewer than 2 options, an option with no valid `stance`, or not exactly one `recommended`
 - a field of the wrong type
@@ -303,7 +310,7 @@ The first command validates the marketplace and the others work on the plugin fo
 Layout of this plugin folder (`claude_mods/plugins/reply-tool/`):
 
 - `.claude-plugin/plugin.json`: the plugin manifest. The marketplace that lists this plugin is `.claude-plugin/marketplace.json` at the repository root.
-- `hooks/reply.ts`: the schema, validator, renderer, and the contract text, all pure functions.
+- `hooks/reply.ts`: the schema, validator, renderer, the `LEVELS` and `ICONS` tables, and the contract text, all pure functions.
 - `hooks/register.tsx`: the commands, the tool, and the hooks.
 - `types/index.d.ts`: the plugin's state type.
 - `tests/reply-tool.test.ts`: tests for the validator, the renderer, the rejection loop, and the commands.

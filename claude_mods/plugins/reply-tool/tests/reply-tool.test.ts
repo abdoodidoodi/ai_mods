@@ -4,7 +4,23 @@ import type { Engine } from 'claude-code/testing'
 
 type Mounted = Awaited<ReturnType<Engine['ui']['mount']>>
 
-import { CLOSING_MARK, CLOSING_MATCHER, CONTRACT, REPLY_SCHEMA, WORKED_EXAMPLE, boldLabel, closingText, indicatorText, renderReply, validateReply, viewBlocks } from '../hooks/reply'
+import {
+  CLOSING_MARK,
+  CLOSING_MATCHER,
+  CONTRACT,
+  ICONS,
+  LEVELS,
+  MAX_PICK_WORDS,
+  REPLY_SCHEMA,
+  WORKED_EXAMPLE,
+  boldLabel,
+  closingText,
+  indicatorText,
+  lineMarkdown,
+  renderReply,
+  validateReply,
+  viewBlocks,
+} from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
@@ -23,7 +39,7 @@ const SAMPLE = {
   decisions: [
     {
       choice: 'Ship Friday or wait a week?',
-      pick: 'Ship Friday, the risk is low.',
+      pick: 'Ship Friday',
       options: [
         { name: 'Wait a week', consequence: 'One more regression pass.', stance: 'option' },
         { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', stance: 'recommended' },
@@ -46,15 +62,17 @@ const SAMPLE = {
   links: [{ label: 'Test report', path: '/home/me/reports/checkout.html' }],
 }
 
-const HEAD = '**Checkout fixed; ship Friday**'
+const HEAD = '● **Checkout fixed; ship Friday**'
 const SUMMARY = 'The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.'
 // Headline and summary are one block, no blank line between; the two plain lines are kept apart with a hard break.
 const TOP = HEAD + '  \n' + SUMMARY
-const Q1 = '**Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
+const Q1 = '◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
 const WHY = '- **The retry now covers the timeout path**'
-const Q2 = '**Can we ship Friday?** Yes, if QA signs off by Thursday.'
-const D1 = '**Ship Friday or wait a week?** Ship Friday, the risk is low.'
+const Q2 = '◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.'
+const D1 = '◇ **Ship Friday or wait a week?** Ship Friday'
 const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
+const NEXT = '→ Want me to draft the QA sign-off request?'
+const CAVEAT = '⚠ Safari 16 was not tested.'
 const DECISION = [
   D1,
   '- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.',
@@ -62,19 +80,11 @@ const DECISION = [
   '- **Skip QA**: Ships today with no regression check.',
 ].join('\n')
 
-const TLDR = [HEAD, Q1, Q2, D1, LINK].join('\n\n')
+// tldr: the shortest status. headline, the decision line, the next step, the links; no Links heading.
+const TLDR = [HEAD, D1, NEXT, LINK].join('\n\n')
 
-const EXEC = [
-  TOP,
-  [Q1, WHY].join('\n'),
-  Q2,
-  DECISION,
-  '⚠ Safari 16 was not tested.',
-  '**Rollout**\n- **Canary**: 5% on Thursday\n- **Full**: Friday 10:00',
-  '**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code',
-  '→ Want me to draft the QA sign-off request?',
-  '**Links**\n' + LINK,
-].join('\n\n')
+// exec: tldr plus the summary, the verdicts, the options, the caveat and the Links heading.
+const EXEC = [TOP, Q1, Q2, DECISION, CAVEAT, NEXT, '↗ **Links**\n' + LINK].join('\n\n')
 
 const FULL = [
   TOP,
@@ -86,11 +96,11 @@ const FULL = [
   ].join('\n'),
   Q2,
   DECISION,
-  '⚠ Safari 16 was not tested.',
-  '**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00',
-  '**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours',
-  '→ Want me to draft the QA sign-off request?',
-  '**Links**\n' + LINK,
+  CAVEAT,
+  '≡ **Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00',
+  '≡ **Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours',
+  NEXT,
+  '↗ **Links**\n' + LINK,
 ].join('\n\n')
 
 const lines = (text: string): string[] =>
@@ -130,10 +140,155 @@ test('the views are one outline: every line of tldr is in exec, and of exec in f
   expect(exec.slice(0, 2)).toEqual([HEAD, SUMMARY])
   expect(full.slice(0, 2)).toEqual([HEAD, SUMMARY])
   expect(tldr[0]).toBe(HEAD)
-  expect(tldr).not.toContain('**Links**')
-  expect(exec).toContain('**Links**')
+  expect(tldr).not.toContain('↗ **Links**')
+  expect(exec).toContain('↗ **Links**')
   for (const view of [tldr, exec, full]) expect(view.at(-1)).toBe(LINK)
-  expect(viewBlocks(SAMPLE, 'tldr')).toHaveLength(5)
+  // tldr is clipped hard: headline, the decision, the next step, the links. No verdicts, options, caveats or reasons.
+  expect(tldr).toEqual([HEAD, D1, NEXT, LINK])
+  expect(viewBlocks(SAMPLE, 'tldr')).toHaveLength(4)
+  // exec is clipped too: verdicts and options yes, reasons, evidence and details no.
+  expect(exec).not.toContain(WHY)
+  expect(exec.join('\n')).not.toContain('Rollout')
+})
+
+test('the prefix invariant holds for every input, and after any one level is flipped', () => {
+  const inputs = [SAMPLE, WORKED_EXAMPLE, { headline: 'A', details: '# Plan\n- one\n  - two\n\nA paragraph.\n\n| a | b |\n| - | - |' }]
+  const check = () => {
+    for (const input of inputs) {
+      const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(input, view)))
+      for (const [small, big] of [[tldr, exec], [exec, full]] as const) {
+        let at = 0
+        for (const line of small) {
+          const found = big.findIndex((b, i) => i >= at && (b === line || b.startsWith(line + ': ')))
+          expect(found, line).toBeGreaterThanOrEqual(0)
+          at = found + 1
+        }
+      }
+    }
+  }
+  check()
+  const saved = { ...LEVELS }
+  try {
+    for (const unit of Object.keys(LEVELS) as (keyof typeof LEVELS)[]) {
+      for (const level of [1, 2, 3] as const) {
+        LEVELS[unit] = level
+        check()
+      }
+      LEVELS[unit] = saved[unit]
+    }
+  } finally {
+    Object.assign(LEVELS, saved)
+  }
+})
+
+test('the LEVELS table drives the output: flipping one entry changes what a view shows', () => {
+  const saved = { ...LEVELS }
+  try {
+    expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
+    // caveat 2 -> 1: the caveat appears in tldr and nowhere else changes.
+    LEVELS.caveat = 1
+    expect(renderReply(SAMPLE, 'tldr')).toBe([HEAD, D1, CAVEAT, NEXT, LINK].join('\n\n'))
+    LEVELS.caveat = saved.caveat
+    // next 1 -> 3: the next step leaves tldr and exec.
+    LEVELS.next = 3
+    expect(renderReply(SAMPLE, 'tldr')).not.toContain('→')
+    expect(renderReply(SAMPLE, 'exec')).not.toContain('→')
+    expect(renderReply(SAMPLE, 'full')).toContain(NEXT)
+    LEVELS.next = saved.next
+    // verdict 2 -> 1: the questions join tldr.
+    LEVELS.verdict = 1
+    expect(renderReply(SAMPLE, 'tldr')).toBe([HEAD, Q1, Q2, D1, NEXT, LINK].join('\n\n'))
+  } finally {
+    Object.assign(LEVELS, saved)
+  }
+  expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
+})
+
+test('a child never shows before its parent: it takes the parent level when that is higher', () => {
+  const saved = { ...LEVELS }
+  try {
+    // reason 1 under a verdict of 2: the reason stays out of tldr.
+    LEVELS.reason = 1
+    LEVELS.evidence = 1
+    expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
+    // The verdict shows from exec, so the reason shows from exec, and the evidence with it.
+    const exec = renderReply(SAMPLE, 'exec')
+    expect(exec).toContain(Q1 + '\n' + WHY + ': The timeout path was the only one that dropped the session.\n  - **Fix**')
+    LEVELS.reason = saved.reason
+    LEVELS.evidence = saved.evidence
+    // headline 3: the summary (2) goes with it; options (2) follow a decision of 3.
+    LEVELS.headline = 3
+    expect(renderReply(SAMPLE, 'exec')).not.toContain('Checkout fixed')
+    expect(renderReply(SAMPLE, 'exec')).not.toContain(SUMMARY)
+    LEVELS.headline = saved.headline
+    LEVELS.decision = 3
+    expect(renderReply(SAMPLE, 'exec')).not.toContain('Ship Friday')
+    expect(renderReply(SAMPLE, 'full')).toContain('- [Recommended] **Ship Friday**')
+    LEVELS.decision = saved.decision
+    // A section of 3 with bullets of 1: the bullets wait for their heading.
+    LEVELS.bullet = 1
+    LEVELS.subbullet = 1
+    expect(renderReply(SAMPLE, 'exec')).not.toContain('Canary')
+    expect(renderReply(SAMPLE, 'full')).toContain('- **Canary**')
+  } finally {
+    Object.assign(LEVELS, saved)
+  }
+})
+
+test('every block opens with its section icon, in both sets; the emoji set swaps cleanly', () => {
+  const expected = (set: 'glyph' | 'emoji') => {
+    const i = ICONS[set]
+    return [i.answer, i.question, i.question, i.decision, i.caveat, i.details, i.details, i.next, i.links]
+  }
+  for (const set of ['glyph', 'emoji'] as const) {
+    const blocks = viewBlocks(SAMPLE, 'full', set)
+    expect(blocks).toHaveLength(9)
+    blocks.forEach((block, i) => {
+      const first = block[0]
+      expect(first && lineMarkdown(first).startsWith(expected(set)[i] ?? '?'), `${set} block ${i}`).toBe(true)
+    })
+  }
+  // The summary line gets no icon; neither do the tldr links (no heading there).
+  expect(renderReply(SAMPLE, 'exec').split('\n')[1]).toBe(SUMMARY)
+  expect(renderReply(SAMPLE, 'tldr')).not.toContain('↗')
+  // The emoji set draws the same reply with only the icons replaced.
+  for (const view of ['tldr', 'exec', 'full'] as const) {
+    let md = renderReply(SAMPLE, view, 'emoji')
+    expect(md).not.toMatch(/[●◆◇≡↗→]/)
+    for (const key of Object.keys(ICONS.glyph) as (keyof typeof ICONS.glyph)[]) md = md.split(ICONS.emoji[key]).join(ICONS.glyph[key])
+    expect(md).toBe(renderReply(SAMPLE, view, 'glyph'))
+  }
+  expect(renderReply(SAMPLE, 'exec', 'emoji')).toContain('🎯 **Checkout fixed; ship Friday**')
+  expect(renderReply(SAMPLE, 'exec', 'emoji')).toContain('🔀 **Ship Friday or wait a week?**')
+  expect(renderReply(SAMPLE, 'exec', 'emoji')).toContain('⚠️ Safari 16 was not tested.')
+  // A `#` heading becomes a bold line behind the icon; a headingless bullet keeps its list marker.
+  expect(renderReply({ headline: 'A', details: '# Plan\n- one' }, 'full')).toBe('● **A**\n\n≡ **Plan**\n- one')
+  expect(renderReply({ headline: 'A', details: '- one\n- two' }, 'full')).toBe('● **A**\n\n- ≡ one\n- two')
+})
+
+test('pick names the recommended option in at most 8 words: more is rejected with the fix', () => {
+  const withPick = (pick: string) => ({
+    headline: 'Ok',
+    decisions: [
+      {
+        choice: 'Go?',
+        pick,
+        options: [
+          { name: 'A', consequence: 'c.', stance: 'recommended' },
+          { name: 'B', consequence: 'd.', stance: 'option' },
+        ],
+      },
+    ],
+  })
+  expect(MAX_PICK_WORDS).toBe(8)
+  expect(validateReply(withPick('Ship Friday'))).toEqual([])
+  expect(validateReply(withPick('One two three four five six seven eight'))).toEqual([])
+  expect(validateReply(withPick('Ship Friday, the risk is low and customers get the fix sooner'))).toEqual([
+    "decisions[0].pick has 12 words (max 8): name the recommended option in at most 8 words, no reason; the reason lives in the options' consequences",
+  ])
+  expect(REPLY_SCHEMA.properties.decisions.items.properties.pick.description).toContain('at most 8 words')
+  expect(CONTRACT).toContain('`pick` is the recommended option in at most 8 words')
+  expect(CONTRACT).toContain('"pick":"Ship Friday"')
 })
 
 test('the recommended option is first with a [Recommended] prefix, wherever it was given; picked replies still draw', () => {
@@ -145,8 +300,8 @@ test('the recommended option is first with a [Recommended] prefix, wherever it w
     answer: 'A.',
     decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Stay', consequence: 'd.', picked: false }, { name: 'Go', consequence: 'c.', picked: true }] }],
   }
-  expect(renderReply(old, 'exec')).toBe('**A.**\n\n**Go?** Yes.\n- [Recommended] **Go**: c.\n- **Stay**: d.')
-  expect(renderReply(old, 'tldr')).toBe('**A.**\n\n**Go?** Yes.')
+  expect(renderReply(old, 'exec')).toBe('● **A.**\n\n◇ **Go?** Yes.\n- [Recommended] **Go**: c.\n- **Stay**: d.')
+  expect(renderReply(old, 'tldr')).toBe('● **A.**\n\n◇ **Go?** Yes.')
 })
 
 test('a bullet of the form Label: text gets a bold label; a time, a URL, a code label or a long label does not', () => {
@@ -166,21 +321,24 @@ test('a bullet of the form Label: text gets a bold label; a time, a URL, a code 
   expect(md).toContain('A plain paragraph: not bolded')
 })
 
-test('details prune by depth: headings and top-level bullets in exec, nested and fenced-under-bullet material only in full', () => {
+test('details are full only: headings, bullets, nested and fenced-under-bullet material', () => {
   const details = ['# Plan', '- step one', '  - sub step', '  ```', '  code under bullet', '  ```', '- step two', '', 'A paragraph.', '', '| a | b |', '| - | - |'].join('\n')
-  expect(renderReply({ headline: 'A', details }, 'exec')).toBe('**A**\n\n# Plan\n- step one\n- step two\n\nA paragraph.\n\n| a | b |\n| - | - |')
+  // The details are full only: exec and tldr draw just the headline.
+  expect(renderReply({ headline: 'A', details }, 'exec')).toBe('● **A**')
   const full = renderReply({ headline: 'A', details }, 'full')
-  expect(full).toContain('- step one\n  - sub step\n  ```\n  code under bullet\n  ```\n- step two')
-  expect(renderReply({ headline: 'A', details }, 'tldr')).toBe('**A**')
+  expect(full).toBe(
+    '● **A**\n\n≡ **Plan**\n- step one\n  - sub step\n  ```\n  code under bullet\n  ```\n- step two\n\n≡ A paragraph.\n\n| a | b |\n| - | - |',
+  )
+  expect(renderReply({ headline: 'A', details }, 'tldr')).toBe('● **A**')
 })
 
 test('a headline-less reply, and a bold the model wrote itself', () => {
-  expect(renderReply({ headline: 'One line.' }, 'exec')).toBe('**One line.**')
-  expect(renderReply({ headline: 'Has **already** bold' }, 'exec')).toBe('Has **already** bold')
-  expect(renderReply({ headline: '', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }, 'tldr')).toBe('**Q?** V.\n\n**R?** W.')
-  // The closing text opens with an invisible marker; a bold that starts on punctuation gets a space so it still renders.
-  expect(closingText({ headline: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + ' **"Yes" it is.**')
-  expect(closingText({ headline: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '**Yes it is.**')
+  expect(renderReply({ headline: 'One line.' }, 'exec')).toBe('● **One line.**')
+  expect(renderReply({ headline: 'Has **already** bold' }, 'exec')).toBe('● Has **already** bold')
+  expect(renderReply({ headline: '', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }, 'exec')).toBe('◆ **Q?** V.\n\n◆ **R?** W.')
+  // The closing text opens with an invisible marker; the icon keeps a bold that starts on punctuation rendering.
+  expect(closingText({ headline: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + '● **"Yes" it is.**')
+  expect(closingText({ headline: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '● **Yes it is.**')
 })
 
 test('stance validation: exactly one recommended per decision, a known value on every option, picked no longer accepted', () => {
@@ -250,11 +408,11 @@ test('summary is 1 to 2 sentences of context and optional', () => {
 
 test('summary is plain text right under the bold headline in exec and full, and absent from tldr', () => {
   const input = { headline: 'JSON', summary: 'It is strict and parses the same everywhere.' }
-  expect(renderReply(input, 'tldr')).toBe('**JSON**')
-  expect(renderReply(input, 'exec')).toBe('**JSON**  \nIt is strict and parses the same everywhere.')
+  expect(renderReply(input, 'tldr')).toBe('● **JSON**')
+  expect(renderReply(input, 'exec')).toBe('● **JSON**  \nIt is strict and parses the same everywhere.')
   expect(renderReply(input, 'full')).toBe(renderReply(input, 'exec'))
-  expect(closingText(input, 'tldr')).toBe(CLOSING_MARK + '**JSON**')
-  expect(renderReply({ headline: 'JSON', summary: '  ' }, 'exec')).toBe('**JSON**')
+  expect(closingText(input, 'tldr')).toBe(CLOSING_MARK + '● **JSON**')
+  expect(renderReply({ headline: 'JSON', summary: '  ' }, 'exec')).toBe('● **JSON**')
 })
 
 test('the contract and the schema lead with headline and summary; answer is gone', () => {
@@ -270,10 +428,10 @@ test('the contract and the schema lead with headline and summary; answer is gone
 
 test('a reply from before 0.1.9 (answer, no headline) still draws its answer as the headline, and a headline wins over a stray answer', () => {
   const old = { answer: 'Checkout is fixed; one call needed on the release date.', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }
-  for (const view of ['tldr', 'exec', 'full'] as const) {
-    expect(renderReply(old, view)).toBe('**Checkout is fixed; one call needed on the release date.**\n\n**Q?** V.\n\n**R?** W.')
-  }
-  expect(renderReply({ answer: 'Old.', headline: 'New' }, 'exec')).toBe('**New**')
+  const answer = '● **Checkout is fixed; one call needed on the release date.**'
+  expect(renderReply(old, 'tldr')).toBe(answer)
+  for (const view of ['exec', 'full'] as const) expect(renderReply(old, view)).toBe(answer + '\n\n◆ **Q?** V.\n\n◆ **R?** W.')
+  expect(renderReply({ answer: 'Old.', headline: 'New' }, 'exec')).toBe('● **New**')
 })
 
 const why1 = (question: Record<string, unknown>) => ({ headline: 'A.', questions: [{ ask: 'Q?', verdict: 'V.', ...question }, { ask: 'R?', verdict: 'W.' }] })
@@ -291,18 +449,20 @@ test('why is one line that states the reason: a generic label, a colon or a seco
 
 test('details without a why are the questions own bullets in full only; with a why, prose follows the headline and lists nest', () => {
   const noWhy = why1({ details: 'Some prose.\n- **Pick**: JSON\n  - nested\n- plain' })
-  expect(renderReply(noWhy, 'exec')).toBe('**A.**\n\n**Q?** V.\n\n**R?** W.')
-  expect(renderReply(noWhy, 'full')).toBe('**A.**\n\n**Q?** V.\n- Some prose.\n- **Pick**: JSON\n  - nested\n- plain\n\n**R?** W.')
+  expect(renderReply(noWhy, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n\n◆ **R?** W.')
+  expect(renderReply(noWhy, 'full')).toBe('● **A.**\n\n◆ **Q?** V.\n- Some prose.\n- **Pick**: JSON\n  - nested\n- plain\n\n◆ **R?** W.')
   const both = why1({ why: 'JSON fails loudly', details: 'No coercion traps.\n- **Pick JSON when**: machines write it\n- Pick YAML when: humans edit it' })
-  expect(renderReply(both, 'exec')).toBe('**A.**\n\n**Q?** V.\n- **JSON fails loudly**\n\n**R?** W.')
+  // The reason is full only now: exec keeps the verdict alone.
+  expect(renderReply(both, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n\n◆ **R?** W.')
   expect(renderReply(both, 'full')).toBe(
-    '**A.**\n\n**Q?** V.\n- **JSON fails loudly**: No coercion traps.\n  - **Pick JSON when**: machines write it\n  - **Pick YAML when**: humans edit it\n\n**R?** W.',
+    '● **A.**\n\n◆ **Q?** V.\n- **JSON fails loudly**: No coercion traps.\n  - **Pick JSON when**: machines write it\n  - **Pick YAML when**: humans edit it\n\n◆ **R?** W.',
   )
 })
 
 test('an old multi-sentence why draws its first sentence as the headline, the rest then the old details in full only', () => {
   const old = why1({ why: 'The retry covers the timeout path. It was the only gap, e.g. 5 files.', details: '- Fix: wrapper' })
-  expect(renderReply(old, 'exec')).toContain('**Q?** V.\n- **The retry covers the timeout path**\n')
+  expect(renderReply(old, 'exec')).not.toContain('The retry')
+  expect(renderReply(old, 'full')).toContain('◆ **Q?** V.\n- **The retry covers the timeout path**: It was')
   expect(renderReply(old, 'full')).toContain('- **The retry covers the timeout path**: It was the only gap, e.g. 5 files.\n  - **Fix**: wrapper')
 })
 
@@ -325,9 +485,9 @@ test('links draw as just the label: [label](url), no path text; only an absolute
     '- [Site](https://example.com/a%20b%281%29)',
     '- [Report](file:///tmp/r.html)',
   ].join('\n')
-  expect(renderReply({ headline: 'Done.', links }, 'tldr')).toBe('**Done.**\n\n' + list)
+  expect(renderReply({ headline: 'Done.', links }, 'tldr')).toBe('● **Done.**\n\n' + list)
   // exec and full carry a bold Links heading; tldr has none.
-  expect(renderReply({ headline: 'Done.', links }, 'exec')).toBe('**Done.**\n\n**Links**\n' + list)
+  expect(renderReply({ headline: 'Done.', links }, 'exec')).toBe('● **Done.**\n\n↗ **Links**\n' + list)
   expect(renderReply({ headline: 'Done.', links }, 'tldr')).not.toContain('Links')
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual(['links[0].path should be an absolute path or an http(s) URL'])
 })
@@ -348,10 +508,10 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs behind the
 })
 
 test('literal backslash-n escapes become real line breaks, except in code spans or when real newlines exist', () => {
-  expect(renderReply({ headline: 'a\\r\\nb\\tc' }, 'full')).toBe('**a**  \n**b\tc**')
-  expect(renderReply({ headline: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('**Run `printf "a\\nb"`**  \n**Done**')
+  expect(renderReply({ headline: 'a\\r\\nb\\tc' }, 'full')).toBe('● **a**  \n**b\tc**')
+  expect(renderReply({ headline: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('● **Run `printf "a\\nb"`**  \n**Done**')
   const full = renderReply({ headline: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
-  expect(full).toContain('**Q?** V.\n- x\n- y')
+  expect(full).toContain('◆ **Q?** V.\n- x\n- y')
   expect(full.endsWith('p  \nq')).toBe(true)
   // A Windows path in a link is never touched.
   expect(renderReply({ headline: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
@@ -382,7 +542,8 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   expect(markdown).not.toContain('file:///')
   expect(markdown).not.toContain('Decision')
   expect(JSON.stringify(await ui.drawn())).not.toContain('cyan')
-  expect(markdown.includes(WHY)).toBe(view !== 'tldr')
+  expect(markdown.includes(Q1)).toBe(view !== 'tldr')
+  expect(markdown.includes(WHY)).toBe(view === 'full')
   expect(markdown.includes(WHY + ': The timeout path was')).toBe(view === 'full')
   expect(markdown).not.toMatch(/\*\*(Why|Details)\*\*/)
   expect(markdown.includes('  - Watch the error dashboard')).toBe(view === 'full')
@@ -395,7 +556,7 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
     expect(await props(/^Ship Friday$/)).toMatchObject({ color: 'green', weight: 'bold' })
     expect(await props(/^Wait a week$/)).toMatchObject({ color: 'blue', weight: 'bold' })
     expect(await props(/^Skip QA$/)).toMatchObject({ color: 'red', weight: 'bold' })
-    expect(markdown).toContain('**Links**')
+    expect(markdown).toContain('↗ **Links**')
     expect(await props(/^: Customers get the fix 5 days sooner.$/)).toBeDefined()
   }
   expect((await ui.find({ type: 'Link' }))?.props).toMatchObject({ href: 'file:///home/me/reports/checkout.html' })
@@ -599,7 +760,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   // An accepted reply that still has issues draws just the reply: no footer, no issue list.
   const flagged = { ...row, input: { headline: 'Done in !441.' } }
   const issues = await $.ui.mount({ plugin: 'reply-tool', surface: 'terminal', component: 'ToolUse', props: flagged, requestId: 'tu4' })
-  expect((await issues.find({ type: 'Markdown' }))?.text).toBe('**Done in !441.**')
+  expect((await issues.find({ type: 'Markdown' }))?.text).toBe('● **Done in !441.**')
   expect(await issues.find({ type: 'Text' })).toBeUndefined()
   await issues.unmount()
 

@@ -11,6 +11,8 @@ export type ReplyView = 'tldr' | 'exec' | 'full'
 export const USAGE = 'Usage: /reply off|tldr|exec|full'
 /** A turn's rejections stop here: the next call is accepted with its issues noted. */
 export const MAX_REJECTIONS = 2
+/** A decision's `pick` names the recommended option in at most this many words, no reason. */
+export const MAX_PICK_WORDS = 8
 
 /** The setting typed after the command, or undefined when it is none of the four. */
 export function parseSetting(args: string | undefined): Setting | undefined {
@@ -56,7 +58,7 @@ export const REPLY_SCHEMA = {
           why: {
             type: 'string',
             description:
-              'Optional: ONE line that states the reason itself, written as a headline (at most about 14 words, one sentence, no colon). Never a label such as "Why" or "Reason". Drawn bold as the bullet under the question, in exec and full.',
+              'Optional: ONE line that states the reason itself, written as a headline (at most about 14 words, one sentence, no colon). Never a label such as "Why" or "Reason". Drawn bold as the bullet under the question, in full only.',
           },
           details: {
             type: 'string',
@@ -75,7 +77,11 @@ export const REPLY_SCHEMA = {
         required: ['choice', 'pick', 'options'],
         properties: {
           choice: { type: 'string', description: 'The decision in the user\'s words, phrased as a question.' },
-          pick: { type: 'string', description: 'One line: what Claude recommends, plus a short reason.' },
+          pick: {
+            type: 'string',
+            description:
+              'The recommended option, in at most 8 words, with no reason (for example "Ship Friday"). The reason lives in the consequence of each option.',
+          },
           options: {
             type: 'array',
             items: {
@@ -122,7 +128,7 @@ export const REPLY_SCHEMA = {
     details: {
       type: 'string',
       description:
-        'Optional outline for everything else: bold section headings (`**Rollout**`), each followed by top-level bullets written `- **Label**: one line`, and deeper material as nested bullets indented under them. exec shows the headings and top-level bullets; full shows everything.',
+        'Optional outline for everything else: bold section headings (`**Rollout**`), each followed by top-level bullets written `- **Label**: one line`, and deeper material as nested bullets indented under them. Drawn in full only.',
     },
   },
 } as const
@@ -389,6 +395,12 @@ export function validateReply(raw: unknown): string[] {
   reply.decisions.forEach((decision, i) => {
     const path = `decisions[${i}]`
     issues.push(...scanField(`${path}.pick`, decision.pick))
+    const pickWords = oneLine(decision.pick) === '' ? 0 : oneLine(decision.pick).split(' ').length
+    if (pickWords > MAX_PICK_WORDS) {
+      issues.push(
+        `${path}.pick has ${pickWords} words (max ${MAX_PICK_WORDS}): name the recommended option in at most ${MAX_PICK_WORDS} words, no reason; the reason lives in the options' consequences`,
+      )
+    }
     const recommended = decision.options.filter(option => option.stance === 'recommended').length
     if (recommended === 0) issues.push(`${path} has no option with stance recommended`)
     if (recommended > 1) issues.push(`${path} has ${recommended} options with stance recommended (exactly 1)`)
@@ -508,18 +520,71 @@ function unescapeReply(reply: Reply): Reply {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The outline: a reply is one list of blocks, each a list of lines tagged with the depth that shows it
-// (1 = tldr, 2 = exec, 3 = full). A view is the same outline with the deeper lines left out, so nothing
-// reorders or restyles between views: lines only appear or disappear.
+// The outline: a reply is one list of blocks, each a list of lines. Every line is one unit of a type, and the
+// LEVELS table below says which view first shows that type (1 = tldr, 2 = exec, 3 = full). A view is the same
+// outline with the lines above its level left out, so nothing reorders or restyles between views: lines only
+// appear or disappear.
 
 export type Depth = 1 | 2 | 3
 export const DEPTH: Record<ReplyView, Depth> = { tldr: 1, exec: 2, full: 3 }
 
+/** What a drawn line is. Each type has one entry in LEVELS. */
+export type Unit =
+  | 'headline'
+  | 'summary'
+  | 'verdict'
+  | 'reason'
+  | 'evidence'
+  | 'decision'
+  | 'option'
+  | 'caveat'
+  | 'section'
+  | 'bullet'
+  | 'subbullet'
+  | 'next'
+  | 'link'
+  | 'linksHeading'
+
+/**
+ * The one table: the first view that shows each unit type (1 = tldr, 2 = exec, 3 = full). Relabelling a type is a
+ * one-line edit here. A child never shows before its parent: when a parent's level is higher than its child's, the
+ * child takes the parent's (headline > summary; verdict > reason > evidence; decision > option; section > bullet >
+ * subbullet). `linksHeading` is the bold heading above the links, which tldr leaves out.
+ */
+export const LEVELS: Record<Unit, Depth> = {
+  headline: 1, // bold shortest answer
+  summary: 2, // the line under the headline
+  verdict: 2, // a question's `**ask** verdict` line
+  reason: 3, // a question's one-line bold reason bullet
+  evidence: 3, // a question's `details`, nested under the reason
+  decision: 1, // the `**choice** pick` line
+  option: 2, // `- [Recommended] **Name**: consequence`
+  caveat: 2, // `⚠ ...`
+  section: 3, // a `details` outline heading
+  bullet: 3, // a `details` top-level bullet or paragraph
+  subbullet: 3, // a nested `details` bullet
+  next: 1, // `→ ...`
+  link: 1, // each link
+  linksHeading: 2,
+}
+
+/** The icon that opens the first line of each kind of block, in two sets. */
+export const ICONS = {
+  glyph: { answer: '●', question: '◆', decision: '◇', caveat: '⚠', details: '≡', next: '→', links: '↗' },
+  emoji: { answer: '🎯', question: '💬', decision: '🔀', caveat: '⚠️', details: '📋', next: '➡️', links: '🔗' },
+} as const
+export type IconSet = keyof typeof ICONS
+/** The set in use: glyphs, which every terminal font draws. */
+export const ICON_SET: IconSet = 'glyph'
+
 export type Line =
-  | { kind: 'md'; depth: Depth; text: string; isCode?: boolean; extend?: string }
-  | { kind: 'option'; depth: Depth; option: ReplyOption }
-  | { kind: 'link'; depth: Depth; link: ReplyLink }
+  | { kind: 'md'; unit: Unit; via?: Unit[]; text: string; isCode?: boolean; extend?: string }
+  | { kind: 'option'; unit: Unit; via?: Unit[]; option: ReplyOption }
+  | { kind: 'link'; unit: Unit; via?: Unit[]; link: ReplyLink }
 export type Block = Line[]
+
+/** The first view that shows a line: its own level, or its ancestors' when one of them is higher. */
+export const levelOf = (line: Line): Depth => Math.max(LEVELS[line.unit], ...(line.via ?? []).map(unit => LEVELS[unit])) as Depth
 
 const BULLET = /^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$/
 const isBulletText = (text: string): boolean => BULLET.test(text)
@@ -554,8 +619,9 @@ const opensFence = (line: string): boolean => {
 
 /**
  * Markdown the model wrote as an outline, read into blocks. Section headings (a `#` heading or a bold-only line)
- * start a block; top-level bullets, paragraphs and tables are depth 2; anything indented under a bullet, with a
- * code block nested there, is depth 3. Blank lines are dropped (lists are tight); a change of kind starts a new block.
+ * start a block (unit `section`); top-level bullets, paragraphs and tables are `bullet` units; anything indented
+ * under a bullet, with a code block nested there, is a `subbullet`. Under a heading, a line's parent is the section.
+ * Blank lines are dropped (lists are tight); a change of kind starts a new block.
  */
 export function parseOutline(text: string): Block[] {
   const blocks: Block[] = []
@@ -563,11 +629,21 @@ export function parseOutline(text: string): Block[] {
   let kind = ''
   let afterBlank = false
   let isInFence = false
-  let fenceDepth: Depth = 2
+  let hasHeading = false
+  let fenceUnit: Unit = 'bullet'
+  const via = (unit: Unit): Unit[] | undefined => {
+    const up: Unit[] = hasHeading && unit !== 'section' ? ['section'] : []
+    if (unit === 'subbullet') up.push('bullet')
+    return up.length === 0 ? undefined : up
+  }
+  const make = (unit: Unit, text: string, isCode?: boolean): Line => {
+    const up = via(unit)
+    return { kind: 'md', unit, ...(up === undefined ? {} : { via: up }), text, ...(isCode === undefined ? {} : { isCode }) }
+  }
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\s+$/, '')
     if (isInFence) {
-      block?.push({ kind: 'md', depth: fenceDepth, text: line, isCode: true })
+      block?.push(make(fenceUnit, line, true))
       if (FENCE.test(line)) isInFence = false
       continue
     }
@@ -576,7 +652,6 @@ export function parseOutline(text: string): Block[] {
       continue
     }
     const isNested = /^\s/.test(line) && kind === 'bullet'
-    const depth: Depth = isNested ? 3 : 2
     const isFence = FENCE.test(line)
     const k = isNested
       ? kind
@@ -595,14 +670,16 @@ export function parseOutline(text: string): Block[] {
       if (isSplit) {
         block = []
         blocks.push(block)
+        hasHeading = k === 'heading'
       }
       kind = k
     }
     afterBlank = false
-    block?.push({ kind: 'md', depth, text: isFence ? line : boldBullet(line), isCode: isFence || undefined })
+    const unit: Unit = isNested ? 'subbullet' : k === 'heading' ? 'section' : 'bullet'
+    block?.push(make(unit, isFence ? line : boldBullet(line), isFence || undefined))
     if (isFence && opensFence(line)) {
       isInFence = true
-      fenceDepth = depth
+      fenceUnit = unit
     }
   }
   return blocks
@@ -622,10 +699,10 @@ export function splitFirstSentence(text: string): [string, string] {
 const headlineText = (text: string): string => oneLine(text).replace(/\.+$/, '')
 
 /**
- * A question's supporting bullet. `why` is the headline (always drawn from exec on, bold); `details` is the rest of
- * that bullet, full only: its leading prose follows the headline as `: prose`, its lists nest under it. An old
- * multi-sentence `why` gives its first sentence as the headline and the rest as leading prose. With no `why`, full
- * draws the details as the question's own bullets.
+ * A question's supporting bullet. `why` is the reason headline (bold); `details` is the evidence under it: its
+ * leading prose follows the headline as `: prose`, its lists nest under it. An old multi-sentence `why` gives its
+ * first sentence as the reason and the rest as leading prose. With no `why`, the details are the question's own bullets.
+ * The reason is a child of the verdict; the evidence is a child of the reason (or of the verdict, with no reason).
  */
 function supportLines(why: string, details: string): Line[] {
   const all = details.split('\n')
@@ -644,45 +721,73 @@ function supportLines(why: string, details: string): Line[] {
   }
   const prose = [oldRest, ...proseRows].filter(part => part !== '').join(' ')
   const indent = hasHead ? '  ' : ''
+  const evidenceVia: Unit[] = hasHead ? ['verdict', 'reason'] : ['verdict']
   if (hasHead) {
-    lines.push({ kind: 'md', depth: 2, text: `- **${headlineText(headline)}**`, ...(prose === '' ? {} : { extend: `: ${prose}` }) })
+    lines.push({
+      kind: 'md',
+      unit: 'reason',
+      via: ['verdict'],
+      text: `- **${headlineText(headline)}**`,
+      ...(prose === '' ? {} : { extend: `: ${prose}` }),
+    })
   }
+  const evidence = (text: string, isCode?: boolean): Line => ({
+    kind: 'md',
+    unit: 'evidence',
+    via: evidenceVia,
+    text,
+    ...(isCode === undefined ? {} : { isCode }),
+  })
   let isInFence = false
   for (const row of all.slice(at)) {
     if (isInFence) {
-      lines.push({ kind: 'md', depth: 3, text: `${indent}${row}`, isCode: true })
+      lines.push(evidence(`${indent}${row}`, true))
       if (FENCE.test(row)) isInFence = false
       continue
     }
     if (row.trim() === '') continue
     if (FENCE.test(row)) {
-      lines.push({ kind: 'md', depth: 3, text: `${indent || '  '}${row.trimEnd()}`, isCode: true })
+      lines.push(evidence(`${indent || '  '}${row.trimEnd()}`, true))
       isInFence = opensFence(row)
       continue
     }
     const text = isBulletText(row) ? boldBullet(row) : /^\s/.test(row) ? row : `- ${boldLabel(row.trim())}`
-    lines.push({ kind: 'md', depth: 3, text: `${indent}${text.trimEnd()}` })
+    lines.push(evidence(`${indent}${text.trimEnd()}`))
   }
   return lines
 }
 
-/** The whole reply as blocks, every depth: headline, questions, decisions, caveats, details, next, links. */
-export function buildBlocks(raw: unknown): Block[] {
+/**
+ * `text` opened by an icon. A `#` heading becomes a bold line; a bullet takes the icon after its marker (so it stays
+ * a list item); a table row, a code fence or an indented line is left as it is, since an icon would break it.
+ */
+export function withIcon(text: string, icon: string): string {
+  const heading = /^#{1,6}\s+(.*)$/.exec(text)
+  const plain = heading === null ? text : `**${heading[1] ?? ''}**`
+  const bullet = BULLET.exec(plain)
+  if (bullet !== null) return `${bullet[1] ?? ''}${icon} ${bullet[2] ?? ''}`
+  if (TABLE.test(plain) || FENCE.test(plain) || /^\s/.test(plain)) return plain
+  return `${icon} ${plain}`
+}
+
+/** The whole reply as blocks, every level: headline, questions, decisions, caveats, details, next, links. */
+export function buildBlocks(raw: unknown, icons: IconSet = ICON_SET): Block[] {
   const reply = unescapeReply(normalizeReply(raw).reply)
-  const md = (depth: Depth, text: string): Line => ({ kind: 'md', depth, text })
+  const icon = ICONS[icons]
+  const md = (unit: Unit, text: string, via?: Unit[]): Line => ({ kind: 'md', unit, ...(via === undefined ? {} : { via }), text })
   const blocks: Block[] = []
 
-  // The headline is bold in every view; the summary is plain text right under it in the same block, exec and full only.
-  // A reply from before 0.1.9 has no headline: its `answer` is drawn as the headline.
+  // The headline is bold in every view and opens with the answer icon; the summary is plain text right under it in
+  // the same block, with no icon. A reply from before 0.1.9 has no headline: its `answer` is drawn as the headline.
   const head = (reply.headline ?? reply.answer ?? '').split('\n').filter(row => row.trim() !== '')
-  const top: Block = head.map(row => md(1, boldLine(row.trimEnd())))
-  if (oneLine(reply.summary) !== '') top.push(md(2, oneLine(reply.summary)))
+  const top: Block = head.map((row, i) => md('headline', i === 0 ? `${icon.answer} ${boldLine(row.trimEnd())}` : boldLine(row.trimEnd())))
+  if (oneLine(reply.summary) !== '') top.push(md('summary', oneLine(reply.summary), ['headline']))
   if (top.length > 0) blocks.push(top)
 
   for (const q of reply.questions) {
     if (q.ask.trim() === '' && q.verdict.trim() === '') continue
     const ask = q.ask.trim() === '' ? '' : `**${oneLine(q.ask)}**`
-    const block: Block = [md(1, [ask, oneLine(q.verdict)].filter(part => part !== '').join(' '))]
+    const block: Block = [md('verdict', `${icon.question} ${[ask, oneLine(q.verdict)].filter(part => part !== '').join(' ')}`)]
     if (q.why.trim() !== '' || q.details.trim() !== '') block.push(...supportLines(q.why, q.details))
     blocks.push(block)
   }
@@ -690,35 +795,43 @@ export function buildBlocks(raw: unknown): Block[] {
   for (const d of reply.decisions) {
     if (d.choice.trim() === '' && d.pick.trim() === '') continue
     const choice = d.choice.trim() === '' ? '' : `**${oneLine(d.choice)}**`
-    const block: Block = [md(1, [choice, oneLine(d.pick)].filter(part => part !== '').join(' '))]
+    const block: Block = [md('decision', `${icon.decision} ${[choice, oneLine(d.pick)].filter(part => part !== '').join(' ')}`)]
     // The recommended option leads; the others keep their order.
     const ordered = [...d.options.filter(o => o.stance === 'recommended'), ...d.options.filter(o => o.stance !== 'recommended')]
-    for (const option of ordered) block.push({ kind: 'option', depth: 2, option })
+    for (const option of ordered) block.push({ kind: 'option', unit: 'option', via: ['decision'], option })
     blocks.push(block)
   }
 
   const caveats = reply.caveats.filter(c => c.trim() !== '')
-  if (caveats.length > 0) blocks.push(caveats.map(c => md(2, `⚠ ${oneLine(c)}`)))
+  if (caveats.length > 0) blocks.push(caveats.map(c => md('caveat', `${icon.caveat} ${oneLine(c)}`)))
 
-  if (reply.details.trim() !== '') blocks.push(...parseOutline(reply.details))
+  if (reply.details.trim() !== '') {
+    for (const block of parseOutline(reply.details)) {
+      const first = block[0]
+      if (first !== undefined && first.kind === 'md') first.text = withIcon(first.text, icon.details)
+      blocks.push(block)
+    }
+  }
 
-  if (reply.next.trim() !== '') blocks.push([md(2, `→ ${oneLine(reply.next)}`)])
+  if (reply.next.trim() !== '') blocks.push([md('next', `${icon.next} ${oneLine(reply.next)}`)])
 
   const links = reply.links.filter(l => l.label.trim() !== '' || l.path.trim() !== '')
   if (links.length > 0) {
-    blocks.push([md(2, '**Links**'), ...links.map((link): Line => ({ kind: 'link', depth: 1, link }))])
+    blocks.push([md('linksHeading', `${icon.links} **Links**`), ...links.map((link): Line => ({ kind: 'link', unit: 'link', link }))])
   }
   return blocks
 }
 
-/** The blocks a view shows: the lines at or above its depth, and no block left empty. */
-export function viewBlocks(raw: unknown, view: ReplyView): Block[] {
+/** The blocks a view shows: the lines at or below its level, and no block left empty. */
+export function viewBlocks(raw: unknown, view: ReplyView, icons: IconSet = ICON_SET): Block[] {
   const depth = DEPTH[view]
-  // A bullet head with an `extend` grows into its full form in full only.
+  // A reason with an `extend` grows into its full form once its evidence shows.
   const shown = (line: Line): Line =>
-    line.kind === 'md' && line.extend !== undefined && depth >= 3 ? { ...line, text: line.text + line.extend, extend: undefined } : line
-  return buildBlocks(raw)
-    .map(block => block.filter(line => line.depth <= depth).map(shown))
+    line.kind === 'md' && line.extend !== undefined && Math.max(levelOf(line), LEVELS.evidence) <= depth
+      ? { ...line, text: line.text + line.extend, extend: undefined }
+      : line
+  return buildBlocks(raw, icons)
+    .map(block => block.filter(line => levelOf(line) <= depth).map(shown))
     .filter(block => block.length > 0)
 }
 
@@ -745,8 +858,8 @@ export function joinMarkdown(lines: Line[]): string {
 }
 
 /** The reply as one markdown string for a view: blocks separated by one blank line. */
-export const renderReply = (raw: unknown, view: ReplyView): string =>
-  viewBlocks(raw, view).map(joinMarkdown).join('\n\n')
+export const renderReply = (raw: unknown, view: ReplyView, icons: IconSet = ICON_SET): string =>
+  viewBlocks(raw, view, icons).map(joinMarkdown).join('\n\n')
 
 /** What a rejected call tells the model: the count and every issue, word for word. */
 export function rejectionText(issues: readonly string[]): string {
@@ -844,7 +957,7 @@ export const WORKED_EXAMPLE = {
   decisions: [
     {
       choice: 'Ship Friday or wait a week?',
-      pick: 'Ship Friday, the risk is low.',
+      pick: 'Ship Friday',
       options: [
         { name: 'Wait a week', consequence: 'One more regression pass.', stance: 'option' },
         { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', stance: 'recommended' },
@@ -862,12 +975,12 @@ export const WORKED_EXAMPLE = {
 export const CONTRACT_ID = 'reply-tool:contract'
 
 const RULES = [
-  '1. Lead with `headline`: the shortest possible answer, at most 8 words, no colon, one sentence (for example "JSON", or "JSON for config, spaces for code"; for a yes/no question "Yes", "No" or "Partly" plus at most a few words). Nuance and reasons go in `summary` (1 to 2 sentences, shown in exec and full), never in the headline.',
+  '1. Lead with `headline`: the shortest possible answer, at most 8 words, no colon, one sentence (for example "JSON", or "JSON for config, spaces for code"; for a yes/no question "Yes", "No" or "Partly" plus at most a few words). Nuance and reasons go in `summary` (1 to 2 sentences, shown in exec and full), never in the headline. The views have three readers: tldr wants the shortest status and runs on trust (headline, decisions, next, links); exec also takes part in decisions (adds the summary, verdicts, options, caveats) and needs only the few words that build a decision; full is for working on one problem by hand and gets every detail.',
   '2. One block per question THE USER asked, in their order, labelled with their question.',
   '3. Each block is a verdict plus 1-2 sentences, with the number kept.',
-  '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict. The `why` of a question is one line that states the reason itself (a headline of at most about 14 words, no colon), never a label like "Why"; its `details` are the rest of that bullet, shown in full only: prose after the headline, lists nested under it.',
-  '5. Decisions are numbered calls with your pick; a caveat appears only when it changes a decision.',
-  '6. `details` is an outline: bold section headings, top-level bullets as `**Label**: one line`, and deeper material as nested bullets. exec draws headings and top-level bullets, full draws everything.',
+  '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict. The `why` of a question is one line that states the reason itself (a headline of at most about 14 words, no colon), never a label like "Why"; it and its `details` (prose after the headline, lists nested under it) are shown in full only, so the verdict must stand without them.',
+  '5. Decisions are numbered calls. `pick` is the recommended option in at most 8 words, with no reason ("Ship Friday"); the reason lives in the options\' consequences. A caveat appears only when it changes a decision.',
+  '6. `details` is an outline: bold section headings, top-level bullets as `**Label**: one line`, and deeper material as nested bullets. It is drawn in full only.',
   '7. Every decision option has a stance: recommended (your pick, exactly one, drawn green), option (a normal alternative, blue) or not_recommended (listed for completeness, not advised, red).',
 ]
 
