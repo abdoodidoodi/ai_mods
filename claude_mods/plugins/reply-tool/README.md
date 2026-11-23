@@ -54,9 +54,20 @@ reply-tool is off at the start of every session. Two commands:
 
 What each view shows:
 
-- `tldr`: the answer (or each question's verdict as a bullet when the answer is empty), `★ **<choice>**` plus Claude's pick for each decision (just `★` plus the pick when the choice is empty), and the links.
-- `exec`: the answer, a numbered line per question (your question in bold, then the verdict), each decision (the choice in bold, with Claude's pick) and its options as a list with the picked one starred, `⚠` caveats, the next step on a line of its own starting with `→`, and the links.
+- `tldr`: the answer (or each question's verdict as a bullet when the answer is empty), each decision as a short block (the choice, then `Recommendation:` and Claude's pick), and the links without a heading.
+- `exec`: the answer, a numbered line per question (your question in bold, then the verdict), each decision as its own block (`Decision` and the choice in bold, the options, then `Recommendation:` and the pick), `⚠` caveats, the next step on a line of its own starting with `→`, and the links under a bold `Links` heading.
 - `full`: `exec` plus each question's `why` and `details` (indented under its number), and the reply's `details` after the links.
+
+Decisions, options and links:
+
+- **Decisions look different from the summary.** In the terminal each decision is a block with a cyan bar on its left and a cyan `Decision` label before the bold choice. On Desktop and mobile (the closing markdown text) it is a blockquote, so it gets the left bar there too.
+- **No star.** The recommended option carries `[Recommended]` after its name.
+- **Bold before the colon.** An option reads `**Name**: what it costs or gains`; only the part before the colon is bold.
+- **Option colors (terminal only).** Each option has a `stance`: `recommended` is drawn green, `option` blue, `not_recommended` (listed for completeness, not advised) red. Desktop and mobile cannot color, so they show `[Recommended]` only. Each decision has exactly one `recommended` option.
+- **Links show just their label,** as a clickable link: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown.
+- **A blank line above every reply** in the terminal, between your prompt and the answer.
+
+Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
 
 In every view the bottom line is bold and a blank line separates each block (answer, questions, decisions, caveats, next step, links), so nothing runs into the next. There is no footer under a reply.
 
@@ -85,8 +96,9 @@ The same reply, as Claude sends it:
       "choice": "Ship Friday?",
       "pick": "Ship, the risk is low.",
       "options": [
-        { "name": "Ship", "consequence": "5 days sooner.", "picked": true },
-        { "name": "Wait", "consequence": "One more regression pass.", "picked": false }
+        { "name": "Ship", "consequence": "5 days sooner.", "stance": "recommended" },
+        { "name": "Wait", "consequence": "One more regression pass.", "stance": "option" },
+        { "name": "Skip QA", "consequence": "No regression check.", "stance": "not_recommended" }
       ]
     }
   ],
@@ -101,9 +113,11 @@ Drawn at `tldr`:
 ```
 **Partly: checkout is fixed, shipping waits on QA.**
 
-★ **Ship Friday?** Ship, the risk is low.
+> **Decision: Ship Friday?**
+>
+> **Recommendation:** Ship, the risk is low.
 
-* Report: /tmp/r.html · file:///tmp/r.html
+* [Report](file:///tmp/r.html)
 ```
 
 Drawn at `exec`:
@@ -115,19 +129,24 @@ Drawn at `exec`:
 
 2. **Can we ship Friday?** Yes, if QA signs off Thursday.
 
-**Ship Friday?** ★ Ship, the risk is low.
-
-- ★ Ship: 5 days sooner.
-- Wait: One more regression pass.
+> **Decision: Ship Friday?**
+>
+> - **Ship [Recommended]**: 5 days sooner.
+> - **Wait**: One more regression pass.
+> - **Skip QA**: No regression check.
+>
+> **Recommendation:** Ship, the risk is low.
 
 ⚠ Safari 16 is untested.
 
 → Want me to draft the QA request?
 
-* Report: /tmp/r.html · file:///tmp/r.html
+**Links**
+
+* [Report](file:///tmp/r.html)
 ```
 
-The text above is the markdown source; the terminal draws it with bold, lists, and links. At `full`, the first verdict also gains "The retry covers timeouts." and "Fix is in MR !441.", each indented under its number, and the reply's `details` come last. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
+The text above is the markdown source (what Desktop and mobile show); the terminal draws the same content itself, with the colored options and a label-only hyperlink. At `full`, the first verdict also gains "The retry covers timeouts." and "Fix is in MR !441.", each indented under its number, and the reply's `details` come last. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
 
 ## Screenshots
 
@@ -148,10 +167,10 @@ The `respond` tool takes one JSON object. Only `answer` is required.
 | `decisions` | array | Only when you must choose. One entry per choice. |
 | `decisions[].choice` | string | The decision, phrased as a question. Required. |
 | `decisions[].pick` | string | One line: what Claude recommends and why. Required. |
-| `decisions[].options` | array | At least 2 entries of `name`, `consequence` (one line) and `picked` (boolean); at least one is picked. Required. |
+| `decisions[].options` | array | At least 2 entries of `name`, `consequence` (one line) and `stance` (`recommended`, `option` or `not_recommended`); exactly one is `recommended`. Required. |
 | `caveats` | array of strings | At most 2, one clause each, only when one changes a decision. |
 | `next` | string | A question or offer that reads on its own. |
-| `links` | array | Deliverables you open: `label` and `path` (an absolute path or an http(s) URL). Always drawn; an absolute path also gets a `file://` URL. |
+| `links` | array | Deliverables you open: `label` and `path` (an absolute path or an http(s) URL). Always drawn as the label alone, as a clickable link to the path or URL. |
 | `details` | string | Optional markdown for everything else. Drawn in `full`. |
 
 The tool checks, and rejects with the exact issues:
@@ -160,7 +179,7 @@ The tool checks, and rejects with the exact issues:
 - more than 2 sentences in `answer` or `why`, more than 1 in a `verdict`
 - exactly 1 question (it belongs in `answer`), or more than 5
 - more than 2 caveats
-- a decision with fewer than 2 options, or none picked
+- a decision with fewer than 2 options, an option with no valid `stance`, or not exactly one `recommended`
 - a field of the wrong type
 - in the fields you read first (`answer`, `verdict`, `pick`, option `name` and `consequence`, `caveats`, `next`): a bare id (`!123`, `ABC-123`, `ADR-12`), a URL, inline code, or a file path. These belong in `details` or `links`.
 

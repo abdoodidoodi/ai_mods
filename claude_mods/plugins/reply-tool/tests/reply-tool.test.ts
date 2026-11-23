@@ -2,7 +2,9 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { CLOSING_MARK, CLOSING_MATCHER, WORKED_EXAMPLE, closingText, indicatorText, renderReply, validateReply } from '../hooks/reply'
+type Mounted = Awaited<ReturnType<Engine['ui']['mount']>>
+
+import { CLOSING_MARK, CLOSING_MATCHER, REPLY_SCHEMA, WORKED_EXAMPLE, closingText, indicatorText, renderReply, validateReply } from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
@@ -22,8 +24,9 @@ const SAMPLE = {
       choice: 'Ship Friday?',
       pick: 'Ship, the risk is low.',
       options: [
-        { name: 'Ship', consequence: '5 days sooner.', picked: true },
-        { name: 'Wait', consequence: 'One more regression pass.', picked: false },
+        { name: 'Ship', consequence: '5 days sooner.', stance: 'recommended' },
+        { name: 'Wait', consequence: 'One more regression pass.', stance: 'option' },
+        { name: 'Skip QA', consequence: 'No regression check.', stance: 'not_recommended' },
       ],
     },
   ],
@@ -33,30 +36,41 @@ const SAMPLE = {
   details: 'Full log attached.',
 }
 
-const LINK = '* Report: `/tmp/r.html` · [file:///tmp/r.html](file:///tmp/r.html)'
+const LINK = '* [Report](file:///tmp/r.html)'
+const LINKS_EXEC = '**Links**\n\n' + LINK
+const DECISION_TLDR = '> **Decision: Ship Friday?**\n>\n> **Recommendation:** Ship, the risk is low.'
+const DECISION_EXEC = [
+  '> **Decision: Ship Friday?**',
+  '>',
+  '> - **Ship [Recommended]**: 5 days sooner.',
+  '> - **Wait**: One more regression pass.',
+  '> - **Skip QA**: No regression check.',
+  '>',
+  '> **Recommendation:** Ship, the risk is low.',
+].join('\n')
 
 const TLDR = [
   '**Partly: checkout is fixed, shipping waits on QA.**',
-  '★ **Ship Friday?** Ship, the risk is low.',
+  DECISION_TLDR,
   LINK,
 ].join('\n\n')
 
 const EXEC = [
   '**Partly: checkout is fixed, shipping waits on QA.**',
   '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
-  '**Ship Friday?** ★ Ship, the risk is low.\n\n- ★ Ship: 5 days sooner.\n- Wait: One more regression pass.',
+  DECISION_EXEC,
   '⚠ Safari 16 is untested.',
   '→ Want me to draft the QA request?',
-  LINK,
+  LINKS_EXEC,
 ].join('\n\n')
 
 const FULL = [
   '**Partly: checkout is fixed, shipping waits on QA.**',
   '1. **Does checkout still fail?** No, failures fell from 4% to 0.1%.\n\n   The retry covers timeouts.\n\n   Fix is in MR !441.\n\n2. **Can we ship Friday?** Yes, if QA signs off Thursday.',
-  '**Ship Friday?** ★ Ship, the risk is low.\n\n- ★ Ship: 5 days sooner.\n- Wait: One more regression pass.',
+  DECISION_EXEC,
   '⚠ Safari 16 is untested.',
   '→ Want me to draft the QA request?',
-  LINK,
+  LINKS_EXEC,
   'Full log attached.',
 ].join('\n\n')
 
@@ -83,14 +97,42 @@ test('bold never spans a line break, keeps list markers, and leaves a line the m
   expect(closingText({ answer: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '**Yes it is.**')
 })
 
-test('tldr draws each decision as star, bold choice, pick, and falls back when the choice is empty', () => {
+test('tldr draws each decision as a blockquote with its recommendation, and falls back when the choice is empty', () => {
   const [first] = SAMPLE.decisions
   const second = { ...first, choice: 'Notify users?', pick: 'Yes, a short note.' }
   const tldr = renderReply({ ...SAMPLE, answer: 'A', decisions: [first, second], links: [] }, 'tldr')
-  expect(tldr).toContain('★ **Ship Friday?** Ship, the risk is low.')
-  expect(tldr).toContain('★ **Notify users?** Yes, a short note.')
+  expect(tldr).toContain(DECISION_TLDR)
+  expect(tldr).toContain('> **Decision: Notify users?**\n>\n> **Recommendation:** Yes, a short note.')
   expect(renderReply({ ...SAMPLE, answer: 'A', decisions: [{ ...first, choice: '' }], links: [] }, 'tldr')).toBe(
-    '**A**\n\n★ Ship, the risk is low.',
+    '**A**\n\n> **Recommendation:** Ship, the risk is low.',
+  )
+  expect(renderReply(SAMPLE, 'full')).not.toContain('★')
+})
+
+test('stance validation: exactly one recommended per decision, a known value on every option, picked no longer accepted', () => {
+  const withOptions = (options: unknown[]) => ({ answer: 'Ok.', decisions: [{ choice: 'Go?', pick: 'Yes.', options }] })
+  const o = (stance: string) => ({ name: 'A', consequence: 'c.', stance })
+  expect(validateReply(withOptions([o('recommended'), o('option'), o('not_recommended')]))).toEqual([])
+  expect(validateReply(withOptions([o('option'), o('option')]))).toEqual(['decisions[0] has no option with stance recommended'])
+  expect(validateReply(withOptions([o('recommended'), o('recommended')]))).toEqual([
+    'decisions[0] has 2 options with stance recommended (exactly 1)',
+  ])
+  expect(validateReply(withOptions([o('recommended'), o('green')]))).toEqual([
+    'decisions[0].options[1].stance should be one of recommended, option, not_recommended',
+  ])
+  const legacy = [{ name: 'A', consequence: 'c.', picked: true }, { name: 'B', consequence: 'c.', picked: false }]
+  expect(validateReply(withOptions(legacy)).length).toBeGreaterThan(0)
+  const props = REPLY_SCHEMA.properties.decisions.items.properties.options.items.properties as Record<string, unknown>
+  expect(Object.keys(props)).toEqual(['name', 'consequence', 'stance'])
+})
+
+test('an old reply with picked booleans still draws: picked is recommended, the rest options', () => {
+  const old = {
+    answer: 'A.',
+    decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Go', consequence: 'c.', picked: true }, { name: 'Stay', consequence: 'd.', picked: false }] }],
+  }
+  expect(renderReply(old, 'exec')).toBe(
+    '**A.**\n\n> **Decision: Go?**\n>\n> - **Go [Recommended]**: c.\n> - **Stay**: d.\n>\n> **Recommendation:** Yes.',
   )
 })
 
@@ -110,7 +152,7 @@ test('validation flags a bare id and a two-sentence verdict, and passes the work
   expect(validateReply({})).toEqual(['answer is missing'])
 })
 
-test('a link label renders as text, and only an absolute path or an http(s) URL is a link', () => {
+test('links draw as just the label: [label](url), no path text; only an absolute path or an http(s) URL is a link', () => {
   const links = [
     { label: '[Docs](https://evil.example)', path: 'javascript:alert(1)' },
     { label: 'Site', path: 'https://example.com/a b(1)' },
@@ -121,15 +163,19 @@ test('a link label renders as text, and only an absolute path or an http(s) URL 
       '**Done.**',
       [
         '* \\[Docs\\]\\(https://evil.example\\): `javascript:alert(1)`',
-        '* Site: [https://example.com/a%20b%281%29](https://example.com/a%20b%281%29)',
-        '* Report: `/tmp/r.html` · [file:///tmp/r.html](file:///tmp/r.html)',
+        '* [Site](https://example.com/a%20b%281%29)',
+        '* [Report](file:///tmp/r.html)',
       ].join('\n'),
     ].join('\n\n'),
   )
+  // exec and full carry a bold Links heading; tldr has none.
+  expect(renderReply({ answer: 'Done.', links }, 'exec')).toContain('**Links**\n\n* \\[Docs\\]')
+  expect(renderReply({ answer: 'Done.', links }, 'tldr')).not.toContain('Links')
+  expect(renderReply({ answer: 'Done.', links }, 'exec')).not.toContain('/tmp/r.html]')
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual(['links[0].path should be an absolute path or an http(s) URL'])
 })
 
-test('Windows drive and UNC paths are accepted and drawn as file URLs', () => {
+test('Windows drive and UNC paths are accepted and drawn as file URLs behind their labels', () => {
   const links = [
     { label: 'A', path: 'C:\\Users\\Me\\My Report.html' },
     { label: 'B', path: 'C:/Users/Me/r(1).html' },
@@ -137,9 +183,10 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs', () => {
   ]
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual([])
   const out = renderReply({ answer: 'Done.', links }, 'tldr')
-  expect(out).toContain('[file:///C:/Users/Me/My%20Report.html](file:///C:/Users/Me/My%20Report.html)')
-  expect(out).toContain('(file:///C:/Users/Me/r%281%29.html)')
-  expect(out).toContain('(file://srv/share/a%20b.txt)')
+  expect(out).toContain('* [A](file:///C:/Users/Me/My%20Report.html)')
+  expect(out).toContain('* [B](file:///C:/Users/Me/r%281%29.html)')
+  expect(out).toContain('* [C](file://srv/share/a%20b.txt)')
+  expect(out).not.toContain('C:\\')
   expect(validateReply({ ...WORKED_EXAMPLE, links: [{ label: 'x', path: 'C:relative' }] })).toHaveLength(1)
 })
 
@@ -153,7 +200,7 @@ test('literal backslash-n escapes become real line breaks, except in code spans 
   expect(full).toContain('   x\n   y')
   expect(full.endsWith('p\nq')).toBe(true)
   // A Windows path in a link is never touched.
-  expect(renderReply({ answer: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('file:///C:/new/tmp.html')
+  expect(renderReply({ answer: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
 })
 
 // What the engine's own turn.step and ui.render would answer, counted so a test sees when they are reached.
@@ -171,6 +218,27 @@ const respond = ($: Engine, input: Record<string, unknown>) =>
   ($.tool.call as unknown as (call: unknown) => Promise<{ deny?: string; result?: string }>)({ tool: RESPOND, ...input })
 
 // An `enabled: true` a pre-release build stored sits in the store: reply-tool must ignore it.
+// The terminal draws a reply as parts: a top margin, markdown blocks, a decision with colored options, links as labels.
+const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') => {
+  expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
+  const markdown = (await ui.findAll({ type: 'Markdown' })).map(node => node.text).join('\n\n')
+  expect(markdown).toContain('**Partly: checkout is fixed, shipping waits on QA.**')
+  expect(markdown).not.toContain('★')
+  expect(markdown).not.toContain('file:///')
+  const props = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern }))?.props
+  if (view === 'tldr') {
+    expect(await props(/^Recommendation: $/)).toBeDefined()
+    expect(await props(/\[Recommended\]/)).toBeUndefined()
+    expect(await props(/^Links$/)).toBeUndefined()
+  } else {
+    expect(await props(/^Ship \[Recommended\]$/)).toMatchObject({ color: 'green', weight: 'bold' })
+    expect(await props(/^Wait$/)).toMatchObject({ color: 'blue', weight: 'bold' })
+    expect(await props(/^Skip QA$/)).toMatchObject({ color: 'red', weight: 'bold' })
+    expect(await props(/^Links$/)).toMatchObject({ weight: 'bold' })
+    expect((await ui.find({ type: 'Link' }))?.props).toMatchObject({ href: 'file:///tmp/r.html' })
+  }
+}
+
 const harness = (on: On, isStoreMocked = true) => {
   if (isStoreMocked) mock.store(on, { enabled: true })
   on('turn.step', async function* (_, e) {
@@ -269,7 +337,11 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
   }
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const reply = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: ROW, requestId: 'tu1' })
-    expect((await reply.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
+    if (surface === 'terminal') {
+      await expectTerminalReply(reply, 'full')
+    } else {
+      expect((await reply.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
+    }
     expect(await reply.find({ type: 'Text', text: /\/reply|full ·/ })).toBeUndefined()
     await reply.unmount()
 
@@ -343,13 +415,13 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   const ui = await $.ui.mount({ plugin: 'reply-tool', surface: 'terminal', component: 'ToolUse', props: row, requestId: 'tu1' })
   // No view footer under a reply, whatever the setting; the setting shows in the bottom-bar indicator instead.
   const footer = async () => (await ui.find({ type: 'Text', text: /\/reply|·/ }))?.text
-  expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'exec'))
+  await expectTerminalReply(ui, 'exec')
   expect(await footer()).toBeUndefined()
   expect(statuses.at(-1)).toBe('exec')
 
   expect((await run($, 'reply', 'tldr')).text).toContain('tldr')
   await ui.redraw()
-  expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'tldr'))
+  await expectTerminalReply(ui, 'tldr')
   expect(await footer()).toBeUndefined()
   expect(statuses.at(-1)).toBe('tldr')
   expect(registered).toHaveLength(2)
@@ -357,7 +429,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   // full while on: the drawing only (the tool stays as registered), everything drawn, and an ON mod's footer, which offers off.
   expect((await run($, 'reply', 'full')).text).toBe('reply-tool now draws replies as full.')
   await ui.redraw()
-  expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
+  await expectTerminalReply(ui, 'full')
   expect(await footer()).toBeUndefined()
   expect(statuses.at(-1)).toBe('full')
   expect(registered).toHaveLength(2)
@@ -372,7 +444,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   expect((await run($, 'reply', 'off')).text).toContain('reply-tool is OFF')
   expect(registered.at(-1)?.isDeferred).toBe(true)
   await ui.redraw()
-  expect((await ui.find({ type: 'Markdown' }))?.text).toBe(renderReply(SAMPLE, 'full'))
+  await expectTerminalReply(ui, 'full')
   expect(await footer()).toBeUndefined()
   // Off: the indicator is cleared.
   expect(statuses.at(-1)).toBeUndefined()

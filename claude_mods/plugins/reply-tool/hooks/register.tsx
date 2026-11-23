@@ -9,6 +9,10 @@ import {
   USAGE,
   addStats,
   closingText,
+  linkTarget,
+  optionLabel,
+  partMarkdown,
+  replyParts,
   formatStats,
   indicatorText,
   parseSetting,
@@ -19,11 +23,14 @@ import {
   validateReply,
   viewOf,
 } from './reply'
-import type { Setting, Stats } from './reply'
+import type { ReplyDecision, ReplyLink, ReplyOption, ReplyPart, Setting, Stats, Stance } from './reply'
 
 // Drawn state: what a respond row reads while drawing. A change redraws past replies.
 // The setting (off, or on drawing tldr, exec or full) lives here alone, in the host's session state,
 // and is never written to `$.store`: every session starts with reply-tool off.
+/** The bar and the label of a decision block in the terminal. */
+const DECISION_COLOR = 'cyan'
+
 const mode = atom({ plugin: 'reply-tool', key: 'mode' } as const, 'off' as Setting)
 
 // One setter per atom: the state library's scan wants each atom named where it is written.
@@ -198,7 +205,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'ToolUse', props: { tool: 'mcp__reply-tool__respond' } }, async ($, e, next) => {
     // ctrl+o and an aborted call: the engine's own row, so the raw call stays inspectable.
     if (e.props.isExpanded === true || e.props.isInterrupted) return next(e)
-    const { Box, Markdown } = $.ui.resolve(e)
+    const { Box, Markdown, Text, Link } = $.ui.resolve(e)
 
     // A rejected call (the validator's deny, or any refusal) ends as an errored tool result in the transcript, so
     // the flag survives a resume and a redraw. It and the running moment before the verdict draw nothing: only the
@@ -206,9 +213,66 @@ export const register: Register = on => {
     if (e.props.isErrored || e.props.isRunning) return <Box display="none" />
 
     // With the mod off a reply already in the transcript draws in full; so does the full setting.
-    const markdown = renderReply(e.props.input, viewOf(await read($, mode)))
+    const view = viewOf(await read($, mode))
+    const markdown = renderReply(e.props.input, view)
     if (markdown.trim() === '') return <Box display="none" />
-    return <Markdown text={markdown} />
+    // Desktop, VS Code and mobile draw the markdown: the decision is its blockquote, the links are `[label](url)`.
+    if (e.surface !== 'terminal') return <Markdown text={markdown} />
+
+    // The terminal draws the parts itself: a blank line above the reply, a colored bar beside each decision,
+    // colored option names, and links that show only their label (an OSC 8 hyperlink).
+    const stanceColor: Record<Stance, string> = { recommended: 'green', option: 'blue', not_recommended: 'red' }
+    const drawOption = (option: ReplyOption, i: number) => (
+      <Text key={`k${i}`}>
+        <Text weight="bold" color={stanceColor[option.stance]}>{optionLabel(option)}</Text>
+        <Text>{`: ${option.consequence.trim()}`}</Text>
+      </Text>
+    )
+    const drawDecision = (decision: ReplyDecision, i: number, isBrief: boolean) => (
+      <Box key={`k${i}`} flexDirection="row">
+        <Box width={1} backgroundColor={DECISION_COLOR} marginRight={1} />
+        <Box flexDirection="column">
+          {decision.choice.trim() === '' ? null : (
+            <Text>
+              <Text color={DECISION_COLOR} weight="bold">{'Decision  '}</Text>
+              <Text weight="bold">{decision.choice.trim()}</Text>
+            </Text>
+          )}
+          {isBrief ? null : <Box flexDirection="column" marginTop={1}>{decision.options.map(drawOption)}</Box>}
+          <Box marginTop={isBrief && decision.choice.trim() === '' ? 0 : 1}>
+            <Text>
+              <Text weight="bold">{'Recommendation: '}</Text>
+              <Text>{decision.pick.trim()}</Text>
+            </Text>
+          </Box>
+        </Box>
+      </Box>
+    )
+    const drawLinks = (links: ReplyLink[], hasHeading: boolean) => (
+      <Box flexDirection="column">
+        {hasHeading ? <Text weight="bold">Links</Text> : null}
+        {links.map((link, i) => {
+          const href = linkTarget(link)
+          const label = link.label.trim() === '' ? link.path.trim() : link.label.trim()
+          return (
+            <Text key={`k${i}`}>
+              {'- '}
+              {href === undefined ? label : <Link href={href}>{label}</Link>}
+            </Text>
+          )
+        })}
+      </Box>
+    )
+    const drawPart = (part: ReplyPart, i: number) => {
+      if (part.kind === 'markdown') return <Markdown key={`k${i}`} text={part.text} />
+      if (part.kind === 'decision') return drawDecision(part.decision, i, part.view === 'tldr')
+      return <Box key={`k${i}`}>{drawLinks(part.links, part.hasHeading)}</Box>
+    }
+    return (
+      <Box flexDirection="column" marginTop={1} gap={1}>
+        {replyParts(e.props.input, view).map(drawPart)}
+      </Box>
+    )
   })
 
   // The closing row (the marked reply text, or a bare zero-width space) is drawn as nothing in the terminal.

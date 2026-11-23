@@ -71,11 +71,16 @@ export const REPLY_SCHEMA = {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['name', 'consequence', 'picked'],
+              required: ['name', 'consequence', 'stance'],
               properties: {
                 name: { type: 'string' },
                 consequence: { type: 'string', description: 'One line: what choosing this costs or gains.' },
-                picked: { type: 'boolean' },
+                stance: {
+                  type: 'string',
+                  enum: ['recommended', 'option', 'not_recommended'],
+                  description:
+                    'recommended: your pick, exactly one per decision (drawn green). option: a normal alternative (blue). not_recommended: listed for completeness, not advised (red).',
+                },
               },
             },
           },
@@ -114,7 +119,9 @@ export const REPLY_SCHEMA = {
 // ---------------------------------------------------------------------------------------------
 // Reading the input defensively: the tool's input is not schema-constrained by the API.
 
-export type ReplyOption = { name: string; consequence: string; picked: boolean }
+export type Stance = 'recommended' | 'option' | 'not_recommended'
+export const STANCES: readonly Stance[] = ['recommended', 'option', 'not_recommended']
+export type ReplyOption = { name: string; consequence: string; stance: Stance }
 export type ReplyDecision = { choice: string; pick: string; options: ReplyOption[] }
 export type ReplyQuestion = { ask: string; verdict: string; why: string; details: string }
 export type ReplyLink = { label: string; path: string }
@@ -206,13 +213,15 @@ export function normalizeReply(raw: unknown): { reply: Reply; problems: string[]
       const optionPath = `${path}.options[${j}]`
       if (!isRecord(option)) {
         problems.push(`${optionPath} should be an object`)
-        return { name: '', consequence: '', picked: false }
+        return { name: '', consequence: '', stance: 'option' }
       }
-      if (typeof option.picked !== 'boolean') problems.push(`${optionPath}.picked should be a boolean`)
+      // `picked` is what replies before 0.1.6 carry: read when drawing, never accepted by the validator.
+      const isStance = (value: unknown): value is Stance => STANCES.includes(value as Stance)
+      if (!isStance(option.stance)) problems.push(`${optionPath}.stance should be one of ${STANCES.join(', ')}`)
       return {
         name: text(`${optionPath}.name`, option.name, true) ?? '',
         consequence: text(`${optionPath}.consequence`, option.consequence, true) ?? '',
-        picked: option.picked === true,
+        stance: isStance(option.stance) ? option.stance : option.picked === true ? 'recommended' : 'option',
       }
     })
     if (item.options === undefined || item.options === null) problems.push(`${path}.options is missing`)
@@ -341,7 +350,9 @@ export function validateReply(raw: unknown): string[] {
   reply.decisions.forEach((decision, i) => {
     const path = `decisions[${i}]`
     issues.push(...scanField(`${path}.pick`, decision.pick))
-    if (!decision.options.some(option => option.picked)) issues.push(`${path} has no option with picked: true`)
+    const recommended = decision.options.filter(option => option.stance === 'recommended').length
+    if (recommended === 0) issues.push(`${path} has no option with stance recommended`)
+    if (recommended > 1) issues.push(`${path} has ${recommended} options with stance recommended (exactly 1)`)
     if (decision.options.length < 2) {
       issues.push(`${path} has ${decision.options.length} option(s) (needs at least 2)`)
     }
@@ -406,22 +417,22 @@ export function fileUrl(path: string): string {
   return `file://${encode(path.split('/'))}`
 }
 
+/** The address a link points at, or undefined when the path is neither an absolute path nor an http(s) URL. */
+export function linkTarget(link: ReplyLink): string | undefined {
+  const path = link.path.trim()
+  if (isAbsolutePath(path)) return fileUrl(path)
+  if (isWebUrl(path)) return webUrl(path)
+  return undefined
+}
+
 /**
- * The label as plain text, then the path. Only an absolute path or an http(s) URL is a link, and its text is its
- * target; any other path (relative, `javascript:`, `data:`, ...) is a code span, so a label never sets the target.
+ * Just the label, as a markdown link. Only an absolute path or an http(s) URL is a link; any other path
+ * (relative, `javascript:`, `data:`, ...) stays a code span after the label, so a label never sets the target.
  */
 function renderLink(link: ReplyLink): string {
-  const label = escapeMarkdown(oneLine(link.label))
-  const path = link.path.trim()
-  if (isAbsolutePath(path)) {
-    const url = fileUrl(path)
-    return `${label}: ${codeSpan(path)} · [${url}](${url})`
-  }
-  if (isWebUrl(path)) {
-    const url = webUrl(path)
-    return `${label}: [${url}](${url})`
-  }
-  return `${label}: ${codeSpan(path)}`
+  const label = escapeMarkdown(oneLine(link.label)) || escapeMarkdown(oneLine(link.path))
+  const url = linkTarget(link)
+  return url === undefined ? `${label}: ${codeSpan(link.path.trim())}` : `[${label}](${url})`
 }
 
 /** One line in bold; an empty line, or one that already holds `**`, is left as the model wrote it. */
@@ -446,11 +457,21 @@ function renderQuestion(question: ReplyQuestion, index: number, view: ReplyView)
   return lines.join('\n\n')
 }
 
-/** A decision: the choice in bold with the pick, then its options as a list with the picked one starred. */
-function renderDecision(decision: ReplyDecision): string {
-  const head = `**${decision.choice.trim()}** ★ ${decision.pick.trim()}`
-  const options = decision.options.map(option => `- ${option.picked ? '★ ' : ''}${option.name}: ${option.consequence}`)
-  return [head, options.join('\n')].join('\n\n')
+/** The tag after a recommended option's name. */
+export const RECOMMENDED_TAG = '[Recommended]'
+
+/** An option's name as drawn: the name, then `[Recommended]` for the recommended one. */
+export const optionLabel = (option: ReplyOption): string =>
+  `${oneLine(option.name)}${option.stance === 'recommended' ? ` ${RECOMMENDED_TAG}` : ''}`
+
+/** A decision as a blockquote (a left bar everywhere): the choice in bold, the options, then the recommendation. */
+function renderDecision(decision: ReplyDecision, view: ReplyView): string {
+  const quote = (lines: string[]) => lines.map(line => (line === '' ? '>' : `> ${line}`)).join('\n')
+  const choice = decision.choice.trim() === '' ? [] : [`**Decision: ${oneLine(decision.choice)}**`, '']
+  const recommendation = `**Recommendation:** ${decision.pick.trim()}`
+  if (view === 'tldr') return quote([...choice, recommendation])
+  const options = decision.options.map(option => `- **${escapeMarkdown(oneLine(option.name))}${option.stance === 'recommended' ? ` ${RECOMMENDED_TAG}` : ''}**: ${option.consequence.trim()}`)
+  return quote([...choice, ...options, '', recommendation])
 }
 
 /**
@@ -482,38 +503,57 @@ function unescapeReply(reply: Reply): Reply {
   }
 }
 
-/** The reply as one markdown string for a view (tldr, exec, or full: exec plus each why and details). */
-export function renderReply(raw: unknown, view: ReplyView): string {
+/** One drawn piece of a reply: markdown, a decision, or the links. The terminal draws these natively, markdown joins them. */
+export type ReplyPart =
+  | { kind: 'markdown'; text: string }
+  | { kind: 'decision'; decision: ReplyDecision; view: ReplyView }
+  | { kind: 'links'; links: ReplyLink[]; hasHeading: boolean }
+
+/** The reply as ordered parts for a view (tldr, exec, or full: exec plus each why and details). */
+export function replyParts(raw: unknown, view: ReplyView): ReplyPart[] {
   const reply = unescapeReply(normalizeReply(raw).reply)
   const questions = reply.questions.filter(q => q.ask.trim() !== '' || q.verdict.trim() !== '')
   const decisions = reply.decisions.filter(d => d.choice.trim() !== '' || d.pick.trim() !== '')
   const links = reply.links.filter(l => l.label.trim() !== '' || l.path.trim() !== '')
   const answer = (reply.answer ?? '').trim()
-  const blocks: string[] = []
-  const linkBlock = () => {
-    // `*` bullets: a `-` list would merge with the decision options above it.
-    if (links.length > 0) blocks.push(links.map(link => `* ${renderLink(link)}`).join('\n'))
+  const parts: ReplyPart[] = []
+  const md = (text: string) => parts.push({ kind: 'markdown', text })
+  const linkPart = () => {
+    if (links.length > 0) parts.push({ kind: 'links', links, hasHeading: view !== 'tldr' })
   }
 
   if (view === 'tldr') {
-    if (answer !== '') blocks.push(boldBlock(answer))
-    else if (questions.length > 0) blocks.push(questions.map(q => `- ${q.verdict.trim()}`).join('\n'))
-    if (decisions.length > 0) blocks.push(decisions.map(d => (d.choice.trim() === '' ? `★ ${d.pick.trim()}` : `★ **${d.choice.trim()}** ${d.pick.trim()}`)).join(BREAK))
-    linkBlock()
-    return blocks.join('\n\n')
+    if (answer !== '') md(boldBlock(answer))
+    else if (questions.length > 0) md(questions.map(q => `- ${q.verdict.trim()}`).join('\n'))
+    for (const decision of decisions) parts.push({ kind: 'decision', decision, view })
+    linkPart()
+    return parts
   }
 
-  if (answer !== '') blocks.push(boldBlock(answer))
+  if (answer !== '') md(boldBlock(answer))
   // A blank line between questions makes the list loose, so each one stands apart; the numbering still runs on.
-  if (questions.length > 0) blocks.push(questions.map((q, i) => renderQuestion(q, i, view)).join('\n\n'))
-  for (const decision of decisions) blocks.push(renderDecision(decision))
+  if (questions.length > 0) md(questions.map((q, i) => renderQuestion(q, i, view)).join('\n\n'))
+  for (const decision of decisions) parts.push({ kind: 'decision', decision, view })
   const caveats = reply.caveats.filter(c => c.trim() !== '')
-  if (caveats.length > 0) blocks.push(caveats.map(c => `⚠ ${c.trim()}`).join(BREAK))
-  if (reply.next.trim() !== '') blocks.push(`→ ${reply.next.trim()}`)
-  linkBlock()
-  if (view === 'full' && reply.details.trim() !== '') blocks.push(reply.details.trim())
-  return blocks.join('\n\n')
+  if (caveats.length > 0) md(caveats.map(c => `⚠ ${c.trim()}`).join(BREAK))
+  if (reply.next.trim() !== '') md(`→ ${reply.next.trim()}`)
+  linkPart()
+  if (view === 'full' && reply.details.trim() !== '') md(reply.details.trim())
+  return parts
 }
+
+/** One part as markdown. */
+export function partMarkdown(part: ReplyPart): string {
+  if (part.kind === 'markdown') return part.text
+  if (part.kind === 'decision') return renderDecision(part.decision, part.view)
+  // `*` bullets: a `-` list would merge with the decision options above it.
+  const list = part.links.map(link => `* ${renderLink(link)}`).join('\n')
+  return part.hasHeading ? `**Links**\n\n${list}` : list
+}
+
+/** The reply as one markdown string for a view. */
+export const renderReply = (raw: unknown, view: ReplyView): string =>
+  replyParts(raw, view).map(partMarkdown).join('\n\n')
 
 /** What a rejected call tells the model: the count and every issue, word for word. */
 export function rejectionText(issues: readonly string[]): string {
@@ -612,8 +652,9 @@ export const WORKED_EXAMPLE = {
       choice: 'Ship Friday or wait a week?',
       pick: 'Ship Friday, the risk is low.',
       options: [
-        { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', picked: true },
-        { name: 'Wait a week', consequence: 'One more full regression pass.', picked: false },
+        { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', stance: 'recommended' },
+        { name: 'Wait a week', consequence: 'One more full regression pass.', stance: 'option' },
+        { name: 'Skip QA', consequence: 'Ships today, with no regression check.', stance: 'not_recommended' },
       ],
     },
   ],
@@ -630,6 +671,7 @@ const RULES = [
   '3. Each block is a verdict plus 1-2 sentences, with the number kept.',
   '4. Evidence, ids, paths and mechanics are pushed down (details, links), never in the verdict.',
   '5. Decisions are numbered calls with your pick; a caveat appears only when it changes a decision.',
+  '6. Every decision option has a stance: recommended (your pick, exactly one, drawn green), option (a normal alternative, blue) or not_recommended (listed for completeness, not advised, red).',
 ]
 
 const EXAMPLE = `Example of a reply to two questions and one decision:\n${JSON.stringify(WORKED_EXAMPLE)}`
