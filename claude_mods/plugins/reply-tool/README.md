@@ -1,6 +1,6 @@
 # reply-tool
 
-A Claude Code mod that makes Claude deliver every reply through a `respond` tool whose input is a structured reply: a headline (the shortest possible answer) with an optional summary, one verdict per question you asked, the decisions you need to make with Claude's pick, caveats, a next step, links, and details. The tool checks each reply against a few rules and sends back the exact issues when it breaks one, and the mod draws the tool row as the formatted reply, at the level of detail you choose.
+A Claude Code mod that makes Claude deliver every reply through a `respond` tool whose input is a structured reply: a headline (a bold summary of the whole reply), a body (one markdown outline, the only place for explanation, progress and evidence), at most one decision (2 to 4 whole plans, one of them recommended), caveats, and links. The tool checks each reply against a ladder of length rules and sends back the exact issues when it breaks one, and the mod draws the tool row as the formatted reply, at the level of detail you choose.
 
 ## Why
 
@@ -8,11 +8,20 @@ Long replies bury the answer. With reply-tool the answer comes first, and you de
 
 Three views, for three readers:
 
-- `tldr` is for someone who wants fully autonomous execution without knowing how or why: only the shortest status updates towards progress. The bold headline (at most 8 words), the decisions (the choice in bold, then Claude's pick: the recommended option in at most 8 words), the next step, and the links. No verdicts, no options.
-- `exec` is for someone who also wants a say in the decisions, with very few whys to build each decision in their head. tldr plus the `status` outline (where things stand, what waits on you: its headings and top-level bullets), one verdict line per question with its one-line reason, each decision's options with their one-line consequences, the caveats, and a `Links` heading. No summary, evidence, nested status bullets or details.
-- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus the summary (1 to 2 sentences under the headline), each question's `details` (the evidence), the nested `status` bullets, and the whole `details` outline (background, how-to, history).
+- `tldr` is for someone who wants fully autonomous execution without knowing how or why: only the shortest status. The bold headline (at most 3 sentences and 60 words), the decision (the choice in bold, then Claude's pick: the head of the recommended option), and the links. No body, no options.
+- `exec` is for someone who also wants a say in the decision, with only the few words that build it in their head. tldr plus the body's section headings and L1 heads (the head only, no tail), every option's head (the recommended one first, in its stance color), the caveat texts, and a `Links` heading.
+- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus the L1 tails (on the same bullet as their head), every L2 and L3 bullet (and the tables, code and prose under them), the option bodies, and the caveat details.
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
+
+### The length ladder
+
+The fields never overlap: each fact has one place, and exec is always a deterministic cut of full. The length allowed at each level tells Claude where a short claim goes and where it can dump detail:
+
+- The headline is the summary of the whole reply, and nothing else repeats it.
+- A body bullet at L1 or L2 is `head: tail`. Its head is a sentence of 8 to 15 words, so exec reads as a list of claims. An L1 tail is one sentence, an L2 tail up to two.
+- L3 is the dumping ground: freeform markdown (tables, code, lists) for evidence and detail, with no head and no limits. Ids, paths, URLs and inline code go there.
+- Ids, paths, URLs and inline code are turned away wherever exec shows them: the headline, section headings, L1 heads and tails, the decision and the caveat text.
 
 ## Install
 
@@ -56,50 +65,59 @@ reply-tool is off at the start of every session. Two commands:
 
 What each view shows. The three views are one outline cut at three levels: every line of `tldr` is in `exec`, and every line of `exec` is in `full`, in the same order and styled the same. Lines only appear or disappear; nothing reorders.
 
-Every view has the same fixed block order: headline and summary, status sections, questions, decisions, caveats, details sections, next step, links. Links are always last.
+Every view has the same fixed block order: headline, body sections, the decision, caveats, links. Links are always last.
 
 Every drawn line is one unit of a type, and one exported table, `LEVELS` in `hooks/reply.ts`, says which view first shows each type (1 = tldr, 2 = exec, 3 = full). Moving a type between views is a one-line edit there.
 
 | Unit | What it is | Level |
 | --- | --- | --- |
-| `headline` | the bold shortest answer | 1 (tldr) |
-| `summary` | the line under the headline | 3 (full) |
-| `verdict` | a question's `**ask** verdict` line | 2 (exec) |
-| `reason` | a question's one-line bold reason bullet | 2 (exec) |
-| `evidence` | a question's `details`, nested under the reason | 3 (full) |
-| `decision` | the `**choice** pick` line | 1 (tldr) |
-| `option` | `- [Recommended] **Name**: consequence` | 2 (exec) |
-| `caveat` | `⚠ caveat` | 2 (exec) |
-| `section` | a `details` outline heading | 3 (full) |
-| `bullet` | a `details` top-level bullet or paragraph | 3 (full) |
-| `subbullet` | a nested `details` bullet | 3 (full) |
-| `statusSection` | a `status` outline heading | 2 (exec) |
-| `statusBullet` | a `status` top-level bullet or paragraph | 2 (exec) |
-| `statusSub` | a nested `status` bullet | 3 (full) |
-| `next` | `→ next` | 1 (tldr) |
+| `headline` | the bold summary of the whole reply | 1 (tldr) |
+| `bodySection` | a body section heading | 2 (exec) |
+| `bodyHead` | an L1 bullet: its head, in bold | 2 (exec) |
+| `bodyTail` | an L1 bullet's tail, on the same bullet as its head | 3 (full) |
+| `bodyL2` | an L2 bullet (`head: tail`), or a table or code block nested at L2 | 3 (full) |
+| `bodyL3` | L3: freeform markdown under an L2 bullet | 3 (full) |
+| `bodyDiagram` | a diagram section's fenced block | 2 (exec) |
+| `decision` | the `**choice** <recommended option head>` line | 1 (tldr) |
+| `option` | `- [Recommended] **Head**` | 2 (exec) |
+| `optionBody` | the option's `: body`, on the same line as its head | 3 (full) |
+| `caveat` | `⚠ text` | 2 (exec) |
+| `caveatDetails` | a caveat's details, nested under it | 3 (full) |
 | `link` | each link | 1 (tldr) |
 | `linksHeading` | the bold heading above the links | 2 (exec) |
 
-A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (headline, then summary; verdict, then reason, then evidence; decision, then option; section, then bullet, then subbullet; status section, then status bullet, then status sub-bullet).
+Units for replies from before 0.1.14 (`summary`, `verdict`, `reason`, `evidence`, `section`, `bullet`, `subbullet`, `statusSection`, `statusBullet`, `statusSub`, `next`) are in the same table, marked LEGACY.
 
-Every view has the same fixed block order: headline and summary, status sections, questions, decisions, caveats, details sections, next step, links. Links are always last.
+A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (body section, then L1 head, then L2, then L3; decision, then option; caveat, then its details). An L1 head and an option grow on the same line when the view reaches their tail or body, so a head is never a separate line from its tail.
 
-Section icons. The first line of each block opens with an icon, so the eye can find a section: `●` the answer (before the bold headline; the summary under it has none), `◆` each question, `◇` each decision, `⚠` the caveats, `▸` each status section, `≡` each details section, `→` the next step, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 💬 🔀 ⚠️ 📍 📋 ➡️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A `#` heading in the status or details is drawn as a bold line behind its icon; a details block that starts with a bullet takes the icon after the list marker, and one that starts with a table or code block gets none. The icons are part of the markdown, so the terminal and Desktop draw the same.
+Section icons. The first line of each block opens with an icon, so the eye can find a section: `●` the headline, `≡` each body section, `◇` the decision, `⚠` each caveat, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 📋 🔀 ⚠️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A `#` heading in the body is drawn as a bold line behind its icon, and a body that starts with bullets (an unnamed section) takes the icon after the first list marker. The icons are part of the markdown, so the terminal and Desktop draw the same.
 
 Spacing and emphasis:
 
-- **One blank line between blocks,** none inside one: each question, each decision, the caveats, each details section, the next step and the links are separate blocks, and lists are tight.
-- **Bold before the colon.** Every bullet of the form `Label: text` (label up to 6 words, no backticks or URLs) has a bold label; the mod adds the bold when the model did not. A colon in a time such as `10:00`, or one not followed by a space, does not count.
-- **No generic labels.** A reason is never drawn as `**Why**:` or `**Details**:`. The `why` is a one-line headline that states the reason itself, and the `details` are the rest of that bullet. The `why` shows from exec on, its `details` in full only. A question with `details` but no `why` draws the details in full as the question's own bullets. A `why` written before 0.1.8 with several sentences draws its first sentence as the headline and the rest as full-only detail, ahead of the old `details`.
-- **Options.** `- [Recommended] **Name**: consequence` for the recommended option, always first, then the others in their given order as `- **Name**: consequence`.
-- **Option colors (terminal only).** `[Recommended]` and the name of the recommended option are green, `option` names blue, `not_recommended` names red. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. Each decision has exactly one `recommended` option.
-- **Links show just their label,** as a clickable link: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown. They are always the last block.
+- **One blank line between blocks,** none inside one: each body section, the decision, each caveat and the links are separate blocks, and lists are tight.
+- **Heads are bold.** An L1 or L2 bullet is drawn as `**head**: tail`, with the head in bold whether or not Claude bolded it. An L3 bullet is drawn as it was written.
+- **Indented under a head.** Markdown cannot nest a list under a paragraph, so a head with lines under it (a body section, the decision, a caveat with details, the Links heading) is drawn as a list item and the lines under it nest two spaces in, in the markdown that Desktop, VS Code and mobile show and in the closing text. The terminal indents them with a box instead. L2 and L3 nest deeper by their own indentation, and a table or a code fence under a bullet keeps that indentation, so it stays inside the list item.
+- **Options.** Under the decision, `- [Recommended] **Head**` for the recommended option, always first, then the others in their given order as `- **Head**`. In `full` each takes its body: `- **Head**: body`.
+- **Option colors (terminal only).** `[Recommended]` and the head of the recommended option are green, `option` heads blue, `not_recommended` heads red. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. The decision has exactly one `recommended` option.
+- **Links show just their label,** as a clickable link in blue: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown. They are always the last block.
 - **A blank line above every reply** in the terminal, between your prompt and the answer.
-- **No decision label, bar or blockquote:** a decision is a bold choice and the pick, followed by its options.
+- **No decision label, bar or blockquote:** the decision is a bold choice and the head of the recommended option, followed by its options.
 
-`status` and `details` are written as outlines: bold section headings (`**Rollout**`), top-level bullets as `**Label**: one line`, and deeper material as nested bullets. `status` is where things stand and what is waiting on you (in a progress update: active work and items waiting on you); it is drawn right after the headline, its headings and top-level bullets from `exec`, its nested bullets in `full`. `details` is background, how-to, history and evidence (in a progress update: shipped history and parked work); it is drawn in `full` only, including a code block nested under a bullet. Add a decision only when you must choose; never restate the headline as one.
+### The body
 
-Replies written before 0.1.9 have an `answer` and no `headline`: the `answer` is drawn as the headline, as it always was (the schema and the contract no longer offer `answer`, and the validator turns a new call that only has one away). Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`.
+The body is one markdown outline: the only place for explanation, progress and evidence.
+
+- **Sections.** A section is a heading (a `#` heading or a line that is only bold, at most 10 words) followed by bullets. Bullets before the first heading are an unnamed section. The number of sections and of bullets in one is not limited.
+- **Depth.** Bullets nest at most 3 levels under a heading: L1, L2 (indented 2 spaces) and L3 (indented 4). A 4th bullet level is turned away.
+- **Bullets.** Every L1 and L2 bullet is `head: tail`: the head is the text before the first colon that is followed by a space or the line end (so `10:00` and `https://...` do not split), and it must be a sentence of 8 to 15 words (words are whitespace-separated, `**` markers ignored). With no such colon the whole bullet is the head and the tail is empty. An L1 tail is at most 1 sentence, an L2 tail at most 2.
+- **L3.** Anything indented under an L2 bullet is L3: bullets, prose, block quotes, tables, fenced code. None of it is checked, so ids, paths, URLs and code go there. It is drawn intact in `full`, nested under its L2 bullet.
+- **Only headings and bullets.** A plain paragraph line outside L3 is turned away. A table or a fenced code block belongs under a bullet (L2 or deeper), never at the top of a section.
+- **A diagram section.** Only when you ask for a diagram: a heading followed by exactly one fenced code block (an ASCII or mermaid diagram) and nothing else. It is exempt from the bullet rules, and drawn intact in `exec` and `full`, not in `tldr`. Mixing bullets with a top-level fence in one section is turned away.
+- **No repeating the headline.** A section heading or an L1 head is turned away when at least 70% of its content words (lowercased, punctuation stripped, a small stopword list removed, at least 3 of them) are in the headline.
+
+Add a decision only when you must choose. There is at most one: sub-choices are folded into its options, so each option is a whole plan.
+
+Replies written before 0.1.14 have `summary`, `status`, `details` and `next` (the old outline fields and the next step), none of which the schema offers any more. They still redraw where they used to: the summary under the headline in full, the status after the headline, the details and the next step after the caveats. Replies written before 0.1.13 have `questions` (an `ask`, a `verdict` and optionally a `why` and `details` each) and `decisions[]` (each with its own `pick`): a question is a `◆` line with its one-line reason from exec and its evidence in full, a decision shows its `pick`. A decision from 0.1.13 has options with `name` and `consequence`, drawn as head and body. Replies written before 0.1.9 have an `answer` and no `headline`: the `answer` is drawn as the headline. Replies written before 0.1.6 (with `picked` booleans) still draw: `picked: true` reads as `recommended`, the rest as `option`. The validator turns a new call that sends any of these fields away and says where the content goes now.
 
 There is no footer under a reply.
 
@@ -113,49 +131,34 @@ The same reply, as Claude sends it:
 
 ```json
 {
-  "headline": "Checkout fixed; ship Friday",
-  "summary": "The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.",
-  "questions": [
-    {
-      "ask": "Does checkout still fail on Safari?",
-      "verdict": "No, the failure rate fell from 4% to 0.1%.",
-      "why": "The retry now covers the timeout path.",
-      "details": "- Fix: retry wrapper in `checkout/pay.ts`\n- MR !441"
-    },
-    {
-      "ask": "Can we ship Friday?",
-      "verdict": "Yes, if QA signs off by Thursday."
-    }
-  ],
-  "decisions": [
-    {
-      "choice": "Ship Friday or wait a week?",
-      "pick": "Ship Friday",
-      "options": [
-        {
-          "name": "Wait a week",
-          "consequence": "One more regression pass.",
-          "stance": "option"
-        },
-        {
-          "name": "Ship Friday",
-          "consequence": "Customers get the fix 5 days sooner.",
-          "stance": "recommended"
-        },
-        {
-          "name": "Skip QA",
-          "consequence": "Ships today with no regression check.",
-          "stance": "not_recommended"
-        }
-      ]
-    }
-  ],
+  "headline": "Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.",
+  "body": "**Why it broke**\n- Safari dropped the session whenever the payment call timed out: no other browser was affected.\n  - The retry wrapper now covers that path with two attempts and a short backoff: the second attempt reuses the original session.\n    - Fix: retry wrapper in `checkout/pay.ts`, MR !441. Failure rate before 4%, after 0.1%. Measured on the staging mirror. Sampled hourly for 24 hours.\n\n**Rollout plan**\n- Canary goes to five percent of traffic on Thursday morning: it is watched for two hours.\n  - Full rollout starts on Friday at 10:00 if the canary stays clean: QA signs off before that.\n    | Stage | Traffic | When |\n    | --- | --- | --- |\n    | Canary | 5% | Thursday |\n    | Full | 100% | Friday 10:00 |",
+  "decision": {
+    "choice": "How should we release the fix?",
+    "options": [
+      {
+        "head": "Canary on Thursday, then everyone on Friday after a two hour watch",
+        "body": "Customers get the fix 5 days sooner, after a canary that is watched first.",
+        "stance": "recommended"
+      },
+      {
+        "head": "Wait a week and run the full regression pass first",
+        "body": "Adds one more regression pass. Customers wait the extra week.",
+        "stance": "option"
+      },
+      {
+        "head": "Ship today to everyone and skip the QA sign-off entirely",
+        "body": "Fastest, but nobody checks the timeout path for regressions.",
+        "stance": "not_recommended"
+      }
+    ]
+  },
   "caveats": [
-    "Safari 16 was not tested."
+    {
+      "text": "Safari 16 was not tested.",
+      "details": "Only Safari 17 and 18 were in the lab, so the timeout path is untested on the older engine."
+    }
   ],
-  "status": "**Waiting on you**\n- **QA sign-off**: needed by Thursday\n  - Regression suite is green",
-  "details": "**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00\n\n**Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours",
-  "next": "Want me to draft the QA sign-off request?",
   "links": [
     {
       "label": "Test report",
@@ -168,81 +171,77 @@ The same reply, as Claude sends it:
 Drawn at `tldr`:
 
 ```
-● **Checkout fixed; ship Friday**
+● **Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.**
 
-◇ **Ship Friday or wait a week?** Ship Friday
-
-→ Want me to draft the QA sign-off request?
+◇ **How should we release the fix?** Canary on Thursday, then everyone on Friday after a two hour watch
 
 - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `exec`:
+Drawn at `exec`: `tldr` plus the section headings and L1 heads, every option head, the caveat text and the Links heading:
 
 ```
-● **Checkout fixed; ship Friday**
+● **Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.**
 
-▸ **Waiting on you**
-- **QA sign-off**: needed by Thursday
+- ≡ **Why it broke**
+  - **Safari dropped the session whenever the payment call timed out**
 
-◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
-- **The retry now covers the timeout path**
+- ≡ **Rollout plan**
+  - **Canary goes to five percent of traffic on Thursday morning**
 
-◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.
-
-◇ **Ship Friday or wait a week?** Ship Friday
-- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.
-- **Wait a week**: One more regression pass.
-- **Skip QA**: Ships today with no regression check.
+- ◇ **How should we release the fix?** Canary on Thursday, then everyone on Friday after a two hour watch
+  - [Recommended] **Canary on Thursday, then everyone on Friday after a two hour watch**
+  - **Wait a week and run the full regression pass first**
+  - **Ship today to everyone and skip the QA sign-off entirely**
 
 ⚠ Safari 16 was not tested.
 
-→ Want me to draft the QA sign-off request?
-
-↗ **Links**
-- [Test report](file:///home/me/reports/checkout.html)
+- ↗ **Links**
+  - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `full`: `exec` plus the summary, the evidence under each reason, the nested status bullets and the details sections:
+Drawn at `full`: `exec` plus the L1 tails, L2 and L3, the option bodies and the caveat details:
 
 ```
-● **Checkout fixed; ship Friday**  
-The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.
+● **Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.**
 
-▸ **Waiting on you**
-- **QA sign-off**: needed by Thursday
-  - Regression suite is green
+- ≡ **Why it broke**
+  - **Safari dropped the session whenever the payment call timed out**: no other browser was affected.
+    - **The retry wrapper now covers that path with two attempts and a short backoff**: the second attempt reuses the original session.
+      - Fix: retry wrapper in `checkout/pay.ts`, MR !441. Failure rate before 4%, after 0.1%. Measured on the staging mirror. Sampled hourly for 24 hours.
 
-◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.
-- **The retry now covers the timeout path**
-  - **Fix**: retry wrapper in `checkout/pay.ts`
-  - MR !441
+- ≡ **Rollout plan**
+  - **Canary goes to five percent of traffic on Thursday morning**: it is watched for two hours.
+    - **Full rollout starts on Friday at 10:00 if the canary stays clean**: QA signs off before that.
+      | Stage | Traffic | When |
+      | --- | --- | --- |
+      | Canary | 5% | Thursday |
+      | Full | 100% | Friday 10:00 |
 
-◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.
+- ◇ **How should we release the fix?** Canary on Thursday, then everyone on Friday after a two hour watch
+  - [Recommended] **Canary on Thursday, then everyone on Friday after a two hour watch**: Customers get the fix 5 days sooner, after a canary that is watched first.
+  - **Wait a week and run the full regression pass first**: Adds one more regression pass. Customers wait the extra week.
+  - **Ship today to everyone and skip the QA sign-off entirely**: Fastest, but nobody checks the timeout path for regressions.
 
-◇ **Ship Friday or wait a week?** Ship Friday
-- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.
-- **Wait a week**: One more regression pass.
-- **Skip QA**: Ships today with no regression check.
+- ⚠ Safari 16 was not tested.
+  - Only Safari 17 and 18 were in the lab, so the timeout path is untested on the older engine.
 
-⚠ Safari 16 was not tested.
-
-≡ **Rollout**
-- **Canary**: 5% on Thursday
-  - Watch the error dashboard for 2 hours
-- **Full**: Friday 10:00
-
-≡ **Risks**
-- **Old sessions**: carts opened before the deploy keep the old code
-  - They expire within 24 hours
-
-→ Want me to draft the QA sign-off request?
-
-↗ **Links**
-- [Test report](file:///home/me/reports/checkout.html)
+- ↗ **Links**
+  - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-The text above is the markdown source (what Desktop and mobile show); the terminal draws the same lines itself, with the options colored by stance and a label-only hyperlink. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
+The text above is the markdown source (what Desktop and mobile show): a head with lines under it is a list item and those lines nest two spaces in. The terminal draws the same lines itself, indenting them with a box, with the options colored by stance and a label-only hyperlink. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
+
+A diagram section, when the user asks for one, is a heading and one fenced block, drawn at `exec` and `full`:
+
+````
+● **The retry sits between the cart and the payment call.**
+
+- ≡ **Architecture**
+  ```
+  cart --> retry wrapper --> payment API
+  ```
+````
 
 ## Screenshots
 
@@ -250,38 +249,35 @@ TODO: add screenshots of `/reply tldr`, `/reply exec` and `/reply full` on the s
 
 ## The reply schema
 
-The `respond` tool takes one JSON object. Only `headline` is required.
+The `respond` tool takes one JSON object, with no other fields. Only `headline` is required.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `headline` | string | The shortest possible answer: at most 8 words, no colon, one sentence (`JSON`, or `JSON for config, spaces for code`). For a yes/no question: Yes, No or Partly plus at most a few words. Drawn bold in every view. |
-| `summary` | string | Optional: 1 to 2 sentences of context for the headline. Drawn as plain text directly under it in `full` only. |
-| `questions` | array | One entry per question you asked, in your order, at most 5. Omitted when you asked one question. |
-| `questions[].ask` | string | Your question in your words, at most 12 words. Required. |
-| `questions[].verdict` | string | One sentence: the verdict first, then the number or effect. No ids, paths, URLs or code. Required. |
-| `questions[].why` | string | Optional: ONE line that states the reason itself, written as a headline (about 14 words at most, one sentence, no colon; never a label such as "Why"). Drawn bold as the question's bullet in `exec` and `full`. |
-| `questions[].details` | string | Optional, `full` only: the rest of the `why` bullet. Leading prose follows the headline as `: prose`; any list nests under the bullet. Without a `why`, drawn as the question's own bullets. |
-| `decisions` | array | Only when you must choose. One entry per choice. |
-| `decisions[].choice` | string | The decision, phrased as a question. Required. |
-| `decisions[].pick` | string | The recommended option in at most 8 words, with no reason (`Ship Friday`). The reason lives in the options' consequences. Required. |
-| `decisions[].options` | array | At least 2 entries of `name`, `consequence` (one line) and `stance` (`recommended`, `option` or `not_recommended`); exactly one is `recommended`. Required. |
-| `caveats` | array of strings | At most 2, one clause each, only when one changes a decision. |
-| `next` | string | A question or offer that reads on its own. |
+| `headline` | string | A bold summary of the whole reply: at most 3 sentences and 60 words, with no ids, paths, URLs or code. Drawn bold in every view. Nothing else in the reply repeats it. |
+| `body` | string | The only place for explanation, progress and evidence: a markdown outline of sections (a heading of at most 10 words, then bullets), 3 bullet levels deep. L1 and L2 bullets are `head: tail` with an 8 to 15 word head that reads as a sentence; an L1 tail is at most 1 sentence, an L2 tail at most 2; L3 is freeform markdown with no limits. See The body above. |
+| `decision` | object | Optional, only when you must choose: the one call to make now. There is at most one; every sub-choice is folded into its options. |
+| `decision.choice` | string | The one call you must make now, as a question of at most 15 words. Required, not blank. |
+| `decision.options` | array | 2 to 4 whole plans that each bundle every sub-choice, never one decision per item. Each has a `head` (the plan as a sentence of 8 to 15 words), a `body` (what the plan means and costs, up to 3 sentences) and a `stance` (`recommended`, `option` or `not_recommended`). Exactly one is `recommended`; its head is the pick that `tldr` shows. Required. |
+| `caveats` | array | At most 3, only when one changes the decision. Each is `{ text, details? }`: `text` is at most 2 sentences and 40 words; `details` is free. A plain string is read as `{ text }`. |
 | `links` | array | Deliverables you open: `label` and `path` (an absolute path or an http(s) URL). Always drawn as the label alone, as a clickable link to the path or URL. |
-| `status` | string | Optional outline of where things stand and what is waiting on you (a progress update: active work, items waiting on you). Same format as `details`. Drawn right after the headline: headings and top-level bullets in `exec` and `full`, nested bullets in `full` only. |
-| `details` | string | Optional outline for background, how-to, history and evidence (shipped history, parked work): bold section headings, top-level bullets as `**Label**: one line`, deeper material as nested bullets. Drawn in `full` only. |
 
 The tool checks, and rejects with the exact issues:
 
-- a missing or empty `headline`; a `headline` of more than 8 words, with a colon, or with more than 1 sentence (the message says: shortest possible answer, at most 8 words; move context into summary)
-- more than 2 sentences in `summary`, more than 1 in a `verdict` or `why`
-- a `why` that is a generic label ("Why", "Because", "Reason", "Details", or one ending in a colon) or contains a colon
-- exactly 1 question (it belongs in `headline`), or more than 5
-- a decision `pick` of more than 8 words (the message says: name the recommended option in at most 8 words, no reason; the reason lives in the options' consequences)
-- more than 2 caveats
-- a decision with fewer than 2 options, an option with no valid `stance`, or not exactly one `recommended`
+- a missing or empty `headline`; a `headline` of more than 60 words or more than 3 sentences
+- `summary`, `status`, `details`, `next`, `questions` or `decisions` in a new call (each is no longer a field; the message says where the content goes now: fold the summary into the headline, put status and details in the body, drop the next step or make it a decision option, answer questions in the headline and their own body sections, send one decision whose 2 to 4 options are whole plans)
+- in the `body`:
+  - a heading of more than 10 words
+  - an L1 or L2 bullet whose head has fewer than 8 or more than 15 words, an L1 tail of more than 1 sentence, an L2 tail of more than 2
+  - a 4th level of bullets (`body section "<heading>" goes 4 levels deep (max 3): condense the top levels`)
+  - a plain paragraph line (`body: write "<first words>" as a bullet under a heading`)
+  - a top-level table or code block, which includes bullets mixed with a top-level code block (a heading with exactly one code block is a diagram section and is fine)
+  - a heading or L1 head that mostly repeats the headline (`body "<head>" repeats the headline: say something the headline doesn't`)
+  - a bare id (`!123`, `ABC-123`, `ADR-12`), a URL, inline code, or a file path in a heading or in an L1 head or tail
+- a `decision` with no `choice`, a blank one, or one of more than 15 words; with fewer than 2 or more than 4 options; with an option that has no valid `stance`, or without exactly one `recommended`; or with an option that still has `name` and `consequence`
+- an option `head` of fewer than 8 or more than 15 words, or a `body` of more than 3 sentences
+- more than 3 caveats; a caveat `text` of more than 2 sentences or 40 words
 - a field of the wrong type
-- in the fields you read first (`headline`, `summary`, `verdict`, `pick`, option `name` and `consequence`, `caveats`, `next`): a bare id (`!123`, `ABC-123`, `ADR-12`), a URL, inline code, or a file path. These belong in `details` or `links`.
+- in the fields drawn in exec (`headline`, `choice`, option `head` and `body`, caveat `text`, body headings and L1 bullets): a bare id, a URL, inline code, or a file path. These belong in L2 and L3 bullets or in `links`.
 
 ## How it works
 
@@ -302,7 +298,7 @@ The setting lives in the session's state and is never saved, so every session st
 - **The reply appears when complete.** A tool call's input is known only once it is whole, so the reply is drawn at the end, not streamed as it is written.
 - **Context cost of the closing text.** The closing text is real assistant text, so each reply is repeated once more in the context of later turns (the `respond` call already carries it). The mod API offers no display-only assistant text, so this is accepted. `tldr` repeats the least, `full` the most.
 - **Switching views outside the terminal.** `/reply tldr|exec|full` redraws past replies only in the terminal. Desktop and mobile show each closing text as it was written, at the view in force when that turn ended.
-- **Heuristic rules.** Sentence counting and the id, URL, code and path checks are pattern matches. They can flag a reply that is fine, and they check form, not accuracy.
+- **Heuristic rules.** Sentence counting, word counting, the repetition check and the id, URL, code and path checks are pattern matches. They can flag a reply that is fine, and they check form, not accuracy. A head is split at its first colon followed by a space, so a colon inside inline code (allowed from L2 down) splits there too.
 - **Early-access API.** Mods use Claude Code's plugin API, which is early access and can change between releases. This copy was built and tested on Claude Code 2.1.310.
 
 ## Development
@@ -321,7 +317,7 @@ The first command validates the marketplace and the others work on the plugin fo
 Layout of this plugin folder (`claude_mods/plugins/reply-tool/`):
 
 - `.claude-plugin/plugin.json`: the plugin manifest. The marketplace that lists this plugin is `.claude-plugin/marketplace.json` at the repository root.
-- `hooks/reply.ts`: the schema, validator, renderer, the `LEVELS` and `ICONS` tables, and the contract text, all pure functions.
+- `hooks/reply.ts`: the schema, validator, body reader, renderer, the `LEVELS` and `ICONS` tables, and the contract text, all pure functions.
 - `hooks/register.tsx`: the commands, the tool, and the hooks.
 - `types/index.d.ts`: the plugin's state type.
 - `tests/reply-tool.test.ts`: tests for the validator, the renderer, the rejection loop, and the commands.

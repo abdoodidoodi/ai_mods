@@ -8,9 +8,11 @@ import {
   CLOSING_MARK,
   CLOSING_MATCHER,
   CONTRACT,
+  HEAD_UNITS,
   ICONS,
   LEVELS,
-  MAX_PICK_WORDS,
+  MAX_HEAD_WORDS,
+  MIN_HEAD_WORDS,
   REPLY_SCHEMA,
   WORKED_EXAMPLE,
   boldLabel,
@@ -18,15 +20,71 @@ import {
   indicatorText,
   lineMarkdown,
   renderReply,
+  toolSpec,
   validateReply,
   viewBlocks,
 } from '../hooks/reply'
 
 const RESPOND = 'mcp__reply-tool__respond'
 
-const SAMPLE = {
+// The worked example is the fixture: every view of it is written out below.
+const HEAD = '● **Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.**'
+// The decision line shows the recommended option's head as its pick.
+const PICK = 'Canary on Thursday, then everyone on Friday after a two hour watch'
+const D1 = `◇ **How should we release the fix?** ${PICK}`
+const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
+const CAVEAT = '⚠ Safari 16 was not tested.'
+const CAVEAT_DETAILS = '- Only Safari 17 and 18 were in the lab, so the timeout path is untested on the older engine.'
+// As markdown (Desktop, VS Code, mobile, the closing text) a head with lines under it is a list item and those lines
+// nest two spaces in; the terminal indents them with a box instead, so its constants stay flat.
+const nest = (head: string, ...rest: string[]): string => [`- ${head}`, ...rest.map(row => `  ${row}`)].join('\n')
+
+const SECTION_1 = '≡ **Why it broke**'
+const L1_1 = '- **Safari dropped the session whenever the payment call timed out**'
+const L1_1_TAIL = ': no other browser was affected.'
+const L2_1 = '  - **The retry wrapper now covers that path with two attempts and a short backoff**: the second attempt reuses the original session.'
+const L3_1 = '    - Fix: retry wrapper in `checkout/pay.ts`, MR !441. Failure rate before 4%, after 0.1%. Measured on the staging mirror. Sampled hourly for 24 hours.'
+const SECTION_2 = '≡ **Rollout plan**'
+const L1_2 = '- **Canary goes to five percent of traffic on Thursday morning**'
+const L1_2_TAIL = ': it is watched for two hours.'
+const L2_2 = '  - **Full rollout starts on Friday at 10:00 if the canary stays clean**: QA signs off before that.'
+const TABLE = ['    | Stage | Traffic | When |', '    | --- | --- | --- |', '    | Canary | 5% | Thursday |', '    | Full | 100% | Friday 10:00 |']
+
+const OPTION_HEADS = [
+  `- [Recommended] **${PICK}**`,
+  '- **Wait a week and run the full regression pass first**',
+  '- **Ship today to everyone and skip the QA sign-off entirely**',
+]
+const OPTION_BODIES = [
+  ': Customers get the fix 5 days sooner, after a canary that is watched first.',
+  ': Adds one more regression pass. Customers wait the extra week.',
+  ': Fastest, but nobody checks the timeout path for regressions.',
+]
+const DECISION = nest(D1, ...OPTION_HEADS)
+const S1_FULL = nest(SECTION_1, L1_1 + L1_1_TAIL, L2_1, L3_1)
+
+// tldr: the headline, the decision pick, the links; no Links heading.
+const TLDR = [HEAD, D1, LINK].join('\n\n')
+
+// exec: tldr plus the section headings and L1 heads (no tails), every option head, the caveat text and the Links heading.
+const EXEC = [HEAD, nest(SECTION_1, L1_1), nest(SECTION_2, L1_2), DECISION, CAVEAT, nest('↗ **Links**', LINK)].join('\n\n')
+
+// full: exec plus the L1 tails, L2 and L3 (a table here), the option bodies and the caveat details.
+const FULL = [
+  HEAD,
+  S1_FULL,
+  nest(SECTION_2, L1_2 + L1_2_TAIL, L2_2, ...TABLE),
+  nest(D1, ...OPTION_HEADS.map((head, i) => head + (OPTION_BODIES[i] ?? ''))),
+  nest(CAVEAT, CAVEAT_DETAILS),
+  nest('↗ **Links**', LINK),
+].join('\n\n')
+
+// A reply from before 0.1.14, as a transcript still holds it: `status`, `details`, `next` and `summary`, and (before
+// 0.1.13) `questions` and `decisions[]` with a `pick`.
+const LEGACY = {
   headline: 'Checkout fixed; ship Friday',
-  summary: 'The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.',
+  summary: 'The retry now covers the timeout path.',
+  status: '**Waiting on you**\n- **QA sign-off**: needed by Thursday\n  - Regression suite is green',
   questions: [
     {
       ask: 'Does checkout still fail on Safari?',
@@ -43,71 +101,14 @@ const SAMPLE = {
       options: [
         { name: 'Wait a week', consequence: 'One more regression pass.', stance: 'option' },
         { name: 'Ship Friday', consequence: 'Customers get the fix 5 days sooner.', stance: 'recommended' },
-        { name: 'Skip QA', consequence: 'Ships today with no regression check.', stance: 'not_recommended' },
       ],
     },
   ],
   caveats: ['Safari 16 was not tested.'],
-  status: '**Waiting on you**\n- **QA sign-off**: needed by Thursday\n  - Regression suite is green',
-  details: [
-    '**Rollout**',
-    '- **Canary**: 5% on Thursday',
-    '  - Watch the error dashboard for 2 hours',
-    '- **Full**: Friday 10:00',
-    '',
-    '**Risks**',
-    '- **Old sessions**: carts opened before the deploy keep the old code',
-    '  - They expire within 24 hours',
-  ].join('\n'),
+  details: '**Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours',
   next: 'Want me to draft the QA sign-off request?',
   links: [{ label: 'Test report', path: '/home/me/reports/checkout.html' }],
 }
-
-const HEAD = '● **Checkout fixed; ship Friday**'
-const SUMMARY = 'The retry covers the timeout path, so Safari no longer fails. Only the release date is left to decide.'
-// Headline and summary are one block, no blank line between; the two plain lines are kept apart with a hard break.
-const TOP = HEAD + '  \n' + SUMMARY
-const Q1 = '◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
-const WHY = '- **The retry now covers the timeout path**'
-const Q2 = '◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.'
-const D1 = '◇ **Ship Friday or wait a week?** Ship Friday'
-const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
-const NEXT = '→ Want me to draft the QA sign-off request?'
-const CAVEAT = '⚠ Safari 16 was not tested.'
-const STATUS_HEAD = '▸ **Waiting on you**'
-const STATUS_BULLET = '- **QA sign-off**: needed by Thursday'
-const STATUS_SUB = '  - Regression suite is green'
-const STATUS = [STATUS_HEAD, STATUS_BULLET].join('\n')
-const DECISION = [
-  D1,
-  '- [Recommended] **Ship Friday**: Customers get the fix 5 days sooner.',
-  '- **Wait a week**: One more regression pass.',
-  '- **Skip QA**: Ships today with no regression check.',
-].join('\n')
-
-// tldr: the shortest status. headline, the decision line, the next step, the links; no Links heading.
-const TLDR = [HEAD, D1, NEXT, LINK].join('\n\n')
-
-// exec: tldr plus the status, the verdicts with their reason headline, the options, the caveat and the Links heading.
-const EXEC = [HEAD, STATUS, Q1 + '\n' + WHY, Q2, DECISION, CAVEAT, NEXT, '↗ **Links**\n' + LINK].join('\n\n')
-
-const FULL = [
-  TOP,
-  [STATUS_HEAD, STATUS_BULLET, STATUS_SUB].join('\n'),
-  [
-    Q1,
-    WHY + ': The timeout path was the only one that dropped the session.',
-    '  - **Fix**: retry wrapper in `checkout/pay.ts`',
-    '  - MR !441',
-  ].join('\n'),
-  Q2,
-  DECISION,
-  CAVEAT,
-  '≡ **Rollout**\n- **Canary**: 5% on Thursday\n  - Watch the error dashboard for 2 hours\n- **Full**: Friday 10:00',
-  '≡ **Risks**\n- **Old sessions**: carts opened before the deploy keep the old code\n  - They expire within 24 hours',
-  NEXT,
-  '↗ **Links**\n' + LINK,
-].join('\n\n')
 
 const lines = (text: string): string[] =>
   text
@@ -115,60 +116,89 @@ const lines = (text: string): string[] =>
     .filter(line => line.trim() !== '')
     .map(line => line.trimEnd())
 
-test('the fixture renders as exactly this markdown in tldr, exec and full', () => {
-  expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
-  expect(renderReply(SAMPLE, 'exec')).toBe(EXEC)
-  expect(renderReply(SAMPLE, 'full')).toBe(FULL)
+// A line without its indent or list marker: a head alone in a smaller view is a paragraph, with lines under it in a bigger view a list item.
+const bare = (line: string): string => line.trim().replace(/^- /, '')
+
+// `n` distinct words, so a head or a tail of a given length is easy to write.
+const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
+
+test('the worked example renders as exactly this markdown in tldr, exec and full', () => {
+  expect(validateReply(WORKED_EXAMPLE)).toEqual([])
+  expect(renderReply(WORKED_EXAMPLE, 'tldr')).toBe(TLDR)
+  expect(renderReply(WORKED_EXAMPLE, 'exec')).toBe(EXEC)
+  expect(renderReply(WORKED_EXAMPLE, 'full')).toBe(FULL)
   for (const view of ['tldr', 'exec', 'full'] as const) {
-    const md = renderReply(SAMPLE, view)
+    const md = renderReply(WORKED_EXAMPLE, view)
     expect(md).not.toMatch(/\/reply|exec ·|tldr ·|full ·|Decision|^>/m)
     // Exactly one blank line between blocks, and none inside a list.
     expect(md).not.toMatch(/\n\n\n/)
-    if (view !== 'tldr') expect(md).not.toMatch(/\n\n- /)
+    // A nested list item never follows a blank line (a head opens its block, so a top-level item may).
+    if (view !== 'tldr') expect(md).not.toMatch(/\n\n {2,}- /)
   }
 })
 
 test('the views are one outline: every line of tldr is in exec, and of exec in full, in order; links come last', () => {
-  // A bullet head may grow in the bigger view: its full form starts with the smaller view's line.
+  // A head may grow in the bigger view: its full form starts with the smaller view's line.
   const inOrder = (small: string[], big: string[]) => {
     let at = 0
     for (const line of small) {
-      const found = big.findIndex((b, i) => i >= at && (b === line || b.startsWith(line + ': ')))
+      const found = big.findIndex((b, i) => i >= at && (bare(b) === bare(line) || bare(b).startsWith(bare(line) + ': ')))
       expect(found, line).toBeGreaterThanOrEqual(0)
       at = found + 1
     }
   }
-  const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(SAMPLE, view)))
+  const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(WORKED_EXAMPLE, view)))
   inOrder(tldr, exec)
   inOrder(exec, full)
-  // The summary is the one line the prefix invariant gains: in exec and full, directly under the headline, never in tldr.
-  expect(tldr).not.toContain(SUMMARY)
-  expect(exec).not.toContain(SUMMARY)
-  expect(exec.slice(0, 2)).toEqual([HEAD, STATUS_HEAD])
-  expect(full.slice(0, 2)).toEqual([HEAD, SUMMARY])
   expect(tldr[0]).toBe(HEAD)
   expect(tldr).not.toContain('↗ **Links**')
-  expect(exec).toContain('↗ **Links**')
-  for (const view of [tldr, exec, full]) expect(view.at(-1)).toBe(LINK)
-  // tldr is clipped hard: headline, the decision, the next step, the links. No verdicts, options, caveats or reasons.
-  expect(tldr).toEqual([HEAD, D1, NEXT, LINK])
-  expect(viewBlocks(SAMPLE, 'tldr')).toHaveLength(4)
-  // exec is clipped too: status, verdicts, reasons and options yes; summary, evidence, nested status and details no.
-  expect(exec).toContain(WHY)
-  expect(exec).toContain(STATUS_BULLET)
-  expect(exec).not.toContain(STATUS_SUB)
-  expect(exec.join('\n')).not.toContain('Rollout')
+  expect(exec).toContain('- ↗ **Links**')
+  for (const view of [tldr, exec, full]) expect(bare(view.at(-1) ?? '')).toBe(bare(LINK))
+  // tldr is clipped hard: the headline, the decision pick, the links. No body, options or caveats.
+  expect(tldr).toEqual([HEAD, D1, LINK])
+  expect(viewBlocks(WORKED_EXAMPLE, 'tldr')).toHaveLength(3)
+  // exec: the section headings and L1 heads, every option head and the caveat text; no tails, L2, L3, option bodies or details.
+  expect(exec).toContain(`  ${L1_1}`)
+  expect(exec).toContain(`  ${L1_2}`)
+  expect(exec).toContain(`  ${OPTION_HEADS[0]}`)
+  expect(exec).toContain(CAVEAT)
+  const execText = exec.join('\n')
+  for (const hidden of [L1_1_TAIL, 'retry wrapper', 'Canary | 5%', OPTION_BODIES[0] ?? '?', 'Only Safari 17']) expect(execText).not.toContain(hidden)
+  // full adds each of them.
+  const fullText = full.join('\n')
+  for (const shown of [L1_1 + L1_1_TAIL, L2_1, L3_1, ...TABLE, (OPTION_HEADS[0] ?? '?') + OPTION_BODIES[0], CAVEAT_DETAILS]) {
+    expect(fullText).toContain(shown.trimEnd())
+  }
 })
 
 test('the prefix invariant holds for every input, and after any one level is flipped', () => {
-  const inputs = [SAMPLE, WORKED_EXAMPLE, { headline: 'A', details: '# Plan\n- one\n  - two\n\nA paragraph.\n\n| a | b |\n| - | - |' }]
+  const body = [
+    `- ${words(9)}: first.`,
+    `  - ${words(9)}: second.`,
+    '    - an L3 bullet',
+    '    | a | b |',
+    '    | - | - |',
+    '    prose under the L2 bullet',
+    '',
+    '# Diagram',
+    '```',
+    'a --> b',
+    '```',
+  ].join('\n')
+  const inputs = [
+    WORKED_EXAMPLE,
+    LEGACY,
+    { headline: 'A', body },
+    { headline: 'A', decision: { choice: 'Go?', options: [{ name: 'Stay', consequence: 'd.', stance: 'option' }, { name: 'Go', consequence: 'c.', stance: 'recommended' }] } },
+    { headline: 'A', details: '# Plan\n- one\n  - two\n\nA paragraph.\n\n| a | b |\n| - | - |' },
+  ]
   const check = () => {
     for (const input of inputs) {
       const [tldr = [], exec = [], full = []] = (['tldr', 'exec', 'full'] as const).map(view => lines(renderReply(input, view)))
       for (const [small, big] of [[tldr, exec], [exec, full]] as const) {
         let at = 0
         for (const line of small) {
-          const found = big.findIndex((b, i) => i >= at && (b === line || b.startsWith(line + ': ')))
+          const found = big.findIndex((b, i) => i >= at && (bare(b) === bare(line) || bare(b).startsWith(bare(line) + ': ')))
           expect(found, line).toBeGreaterThanOrEqual(0)
           at = found + 1
         }
@@ -193,52 +223,53 @@ test('the prefix invariant holds for every input, and after any one level is fli
 test('the LEVELS table drives the output: flipping one entry changes what a view shows', () => {
   const saved = { ...LEVELS }
   try {
-    expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
-    // caveat 2 -> 1: the caveat appears in tldr and nowhere else changes.
+    expect(renderReply(WORKED_EXAMPLE, 'tldr')).toBe(TLDR)
+    // caveat 2 -> 1: the caveat appears in tldr (its details stay in full) and nowhere else changes.
     LEVELS.caveat = 1
-    expect(renderReply(SAMPLE, 'tldr')).toBe([HEAD, D1, CAVEAT, NEXT, LINK].join('\n\n'))
+    expect(renderReply(WORKED_EXAMPLE, 'tldr')).toBe([HEAD, D1, CAVEAT, LINK].join('\n\n'))
     LEVELS.caveat = saved.caveat
-    // next 1 -> 3: the next step leaves tldr and exec.
-    LEVELS.next = 3
-    expect(renderReply(SAMPLE, 'tldr')).not.toContain('→')
-    expect(renderReply(SAMPLE, 'exec')).not.toContain('→')
-    expect(renderReply(SAMPLE, 'full')).toContain(NEXT)
-    LEVELS.next = saved.next
-    // verdict 2 -> 1: the questions join tldr.
-    LEVELS.verdict = 1
-    expect(renderReply(SAMPLE, 'tldr')).toBe([HEAD, Q1, Q2, D1, NEXT, LINK].join('\n\n'))
+    // bodyTail 3 -> 2: the L1 tails join exec, and nothing below them.
+    LEVELS.bodyTail = 2
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).toContain(nest(SECTION_1, L1_1 + L1_1_TAIL))
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('retry wrapper')
+    LEVELS.bodyTail = saved.bodyTail
+    // optionBody 3 -> 2: the option bodies join exec.
+    LEVELS.optionBody = 2
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).toContain(OPTION_BODIES[1] ?? '?')
+    LEVELS.optionBody = saved.optionBody
+    // option 2 -> 1: the option heads join tldr, under their decision.
+    LEVELS.option = 1
+    expect(renderReply(WORKED_EXAMPLE, 'tldr')).toBe([HEAD, DECISION, LINK].join('\n\n'))
   } finally {
     Object.assign(LEVELS, saved)
   }
-  expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
+  expect(renderReply(WORKED_EXAMPLE, 'tldr')).toBe(TLDR)
 })
 
 test('a child never shows before its parent: it takes the parent level when that is higher', () => {
   const saved = { ...LEVELS }
   try {
-    // reason 1 under a verdict of 2: the reason stays out of tldr.
-    LEVELS.reason = 1
-    LEVELS.evidence = 1
-    expect(renderReply(SAMPLE, 'tldr')).toBe(TLDR)
-    // The verdict shows from exec, so the reason shows from exec, and the evidence with it.
-    const exec = renderReply(SAMPLE, 'exec')
-    expect(exec).toContain(Q1 + '\n' + WHY + ': The timeout path was the only one that dropped the session.\n  - **Fix**')
-    LEVELS.reason = saved.reason
-    LEVELS.evidence = saved.evidence
-    // headline 3: the summary (2) goes with it; options (2) follow a decision of 3.
+    // headline 3: nothing hangs from it that is not also 3; here the headline alone leaves exec.
     LEVELS.headline = 3
-    expect(renderReply(SAMPLE, 'exec')).not.toContain('Checkout fixed')
-    expect(renderReply(SAMPLE, 'exec')).not.toContain(SUMMARY)
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('Safari checkout is fixed')
     LEVELS.headline = saved.headline
+    // decision 3: its options (2) follow it.
     LEVELS.decision = 3
-    expect(renderReply(SAMPLE, 'exec')).not.toContain('Ship Friday')
-    expect(renderReply(SAMPLE, 'full')).toContain('- [Recommended] **Ship Friday**')
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('Wait a week')
+    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain(OPTION_HEADS[0] ?? '?')
     LEVELS.decision = saved.decision
-    // A section of 3 with bullets of 1: the bullets wait for their heading.
-    LEVELS.bullet = 1
-    LEVELS.subbullet = 1
-    expect(renderReply(SAMPLE, 'exec')).not.toContain('Canary')
-    expect(renderReply(SAMPLE, 'full')).toContain('- **Canary**')
+    // A section heading of 3 with L1 heads of 1: the heads wait for their heading.
+    LEVELS.bodySection = 3
+    LEVELS.bodyHead = 1
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('Safari dropped the session')
+    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain(L1_1 + L1_1_TAIL)
+    LEVELS.bodySection = saved.bodySection
+    LEVELS.bodyHead = saved.bodyHead
+    // A caveat of 3 with details of 2: the details wait for the caveat.
+    LEVELS.caveat = 3
+    LEVELS.caveatDetails = 2
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('Only Safari 17')
+    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain('Only Safari 17')
   } finally {
     Object.assign(LEVELS, saved)
   }
@@ -247,76 +278,47 @@ test('a child never shows before its parent: it takes the parent level when that
 test('every block opens with its section icon, in both sets; the emoji set swaps cleanly', () => {
   const expected = (set: 'glyph' | 'emoji') => {
     const i = ICONS[set]
-    return [i.answer, i.status, i.question, i.question, i.decision, i.caveat, i.details, i.details, i.next, i.links]
+    return [i.answer, i.body, i.body, i.decision, i.caveat, i.links]
   }
   for (const set of ['glyph', 'emoji'] as const) {
-    const blocks = viewBlocks(SAMPLE, 'full', set)
-    expect(blocks).toHaveLength(10)
+    const blocks = viewBlocks(WORKED_EXAMPLE, 'full', set)
+    expect(blocks).toHaveLength(6)
     blocks.forEach((block, i) => {
       const first = block[0]
       expect(first && lineMarkdown(first).startsWith(expected(set)[i] ?? '?'), `${set} block ${i}`).toBe(true)
     })
   }
-  // The summary line gets no icon and is full only; neither do the tldr links (no heading there).
-  expect(renderReply(SAMPLE, 'full').split('\n')[1]).toBe(SUMMARY)
-  expect(renderReply(SAMPLE, 'exec')).not.toContain(SUMMARY)
-  expect(renderReply(SAMPLE, 'exec').split('\n')[1]).toBe('')
-  expect(renderReply(SAMPLE, 'exec').split('\n')[2]).toBe('▸ **Waiting on you**')
-  expect(renderReply(SAMPLE, 'tldr')).not.toContain('↗')
+  // tldr has no Links heading, so no links icon.
+  expect(renderReply(WORKED_EXAMPLE, 'tldr')).not.toContain('↗')
   // The emoji set draws the same reply with only the icons replaced.
   for (const view of ['tldr', 'exec', 'full'] as const) {
-    let md = renderReply(SAMPLE, view, 'emoji')
+    let md = renderReply(WORKED_EXAMPLE, view, 'emoji')
     expect(md).not.toMatch(/[●◆◇≡▸↗→]/)
     for (const key of Object.keys(ICONS.glyph) as (keyof typeof ICONS.glyph)[]) md = md.split(ICONS.emoji[key]).join(ICONS.glyph[key])
-    expect(md).toBe(renderReply(SAMPLE, view, 'glyph'))
+    expect(md).toBe(renderReply(WORKED_EXAMPLE, view, 'glyph'))
   }
-  expect(renderReply(SAMPLE, 'exec', 'emoji')).toContain('🎯 **Checkout fixed; ship Friday**')
-  expect(renderReply(SAMPLE, 'exec', 'emoji')).toContain('🔀 **Ship Friday or wait a week?**')
-  expect(renderReply(SAMPLE, 'exec', 'emoji')).toContain('⚠️ Safari 16 was not tested.')
+  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('🎯 **Safari checkout is fixed')
+  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('📋 **Why it broke**')
+  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('🔀 **How should we release the fix?**')
+  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('⚠️ Safari 16 was not tested.')
   // A `#` heading becomes a bold line behind the icon; a headingless bullet keeps its list marker.
-  expect(renderReply({ headline: 'A', details: '# Plan\n- one' }, 'full')).toBe('● **A**\n\n≡ **Plan**\n- one')
-  expect(renderReply({ headline: 'A', details: '- one\n- two' }, 'full')).toBe('● **A**\n\n- ≡ one\n- two')
+  const eight = 'one two three four five six seven eight'
+  expect(renderReply({ headline: 'A', body: `# Plan\n- ${eight}: t.` }, 'full')).toBe(`● **A**\n\n- ≡ **Plan**\n  - **${eight}**: t.`)
+  expect(renderReply({ headline: 'A', body: `- ${eight}: t.\n- ${eight} again` }, 'full')).toBe(`● **A**\n\n- ≡ **${eight}**: t.\n- **${eight} again**`)
 })
 
-test('pick names the recommended option in at most 8 words: more is rejected with the fix', () => {
-  const withPick = (pick: string) => ({
-    headline: 'Ok',
-    decisions: [
-      {
-        choice: 'Go?',
-        pick,
-        options: [
-          { name: 'A', consequence: 'c.', stance: 'recommended' },
-          { name: 'B', consequence: 'd.', stance: 'option' },
-        ],
-      },
-    ],
-  })
-  expect(MAX_PICK_WORDS).toBe(8)
-  expect(validateReply(withPick('Ship Friday'))).toEqual([])
-  expect(validateReply(withPick('One two three four five six seven eight'))).toEqual([])
-  expect(validateReply(withPick('Ship Friday, the risk is low and customers get the fix sooner'))).toEqual([
-    "decisions[0].pick has 12 words (max 8): name the recommended option in at most 8 words, no reason; the reason lives in the options' consequences",
-  ])
-  expect(REPLY_SCHEMA.properties.decisions.items.properties.pick.description).toContain('at most 8 words')
-  expect(CONTRACT).toContain('`pick` is the recommended option in at most 8 words')
-  expect(CONTRACT).toContain('"pick":"Ship Friday"')
+test('the recommended option is first with a [Recommended] prefix, wherever it was given, and its head is the pick', () => {
+  const exec = renderReply(WORKED_EXAMPLE, 'exec')
+  expect(exec).toContain(nest(D1, `${OPTION_HEADS[0]}`))
+  expect(exec.indexOf('Wait a week and run')).toBeLessThan(exec.indexOf('Ship today to everyone'))
+  expect(exec).not.toContain('Friday after a two hour watch [Recommended]')
+  const last = { headline: 'A', decision: { choice: 'Go?', options: [{ head: 'Stay', body: 'd.', stance: 'option' }, { head: 'Go', body: 'c.', stance: 'recommended' }] } }
+  expect(renderReply(last, 'exec')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**\n  - **Stay**')
+  expect(renderReply(last, 'full')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**: c.\n  - **Stay**: d.')
+  expect(renderReply(last, 'tldr')).toBe('● **A**\n\n◇ **Go?** Go')
 })
 
-test('the recommended option is first with a [Recommended] prefix, wherever it was given; picked replies still draw', () => {
-  const exec = renderReply(SAMPLE, 'exec')
-  expect(exec).toContain(D1 + '\n- [Recommended] **Ship Friday**:')
-  expect(exec.indexOf('Wait a week**')).toBeLessThan(exec.indexOf('Skip QA**'))
-  expect(exec).not.toContain('Ship Friday [Recommended]')
-  const old = {
-    answer: 'A.',
-    decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Stay', consequence: 'd.', picked: false }, { name: 'Go', consequence: 'c.', picked: true }] }],
-  }
-  expect(renderReply(old, 'exec')).toBe('● **A.**\n\n◇ **Go?** Yes.\n- [Recommended] **Go**: c.\n- **Stay**: d.')
-  expect(renderReply(old, 'tldr')).toBe('● **A.**\n\n◇ **Go?** Yes.')
-})
-
-test('a bullet of the form Label: text gets a bold label; a time, a URL, a code label or a long label does not', () => {
+test('a bullet of the form Label: text gets a bold label (used by a past reply\'s outlines); a time, a URL, a code label or a long label does not', () => {
   expect(boldLabel('Fix: retry wrapper')).toBe('**Fix**: retry wrapper')
   expect(boldLabel('Built by Codex:')).toBe('**Built by Codex**:')
   expect(boldLabel('Full: Friday 10:00')).toBe('**Full**: Friday 10:00')
@@ -333,159 +335,250 @@ test('a bullet of the form Label: text gets a bold label; a time, a URL, a code 
   expect(md).toContain('A plain paragraph: not bolded')
 })
 
-test('details are full only: headings, bullets, nested and fenced-under-bullet material', () => {
-  const details = ['# Plan', '- step one', '  - sub step', '  ```', '  code under bullet', '  ```', '- step two', '', 'A paragraph.', '', '| a | b |', '| - | - |'].join('\n')
-  // The details are full only: exec and tldr draw just the headline.
-  expect(renderReply({ headline: 'A', details }, 'exec')).toBe('● **A**')
-  const full = renderReply({ headline: 'A', details }, 'full')
-  expect(full).toBe(
-    '● **A**\n\n≡ **Plan**\n- step one\n  - sub step\n  ```\n  code under bullet\n  ```\n- step two\n\n≡ A paragraph.\n\n| a | b |\n| - | - |',
+test('the body draws as an outline: L1 heads in exec, tails and L2 in full, L3 freeform and intact, a diagram section in exec and full', () => {
+  const [a, b, c] = [words(9), words(10), words(11)]
+  const body = [
+    '# Plan',
+    `- ${a}: Tail one.`,
+    `  - ${b}: Tail two.`,
+    '    - L3 bullet',
+    '    | x | y |',
+    '    | - | - |',
+    '    ```',
+    '    code under L3',
+    '    ```',
+    '    Free prose.',
+    `- ${c}`,
+    '',
+    '**Diagram**',
+    '```',
+    'a --> b',
+    '```',
+  ].join('\n')
+  const input = { headline: 'A', body }
+  expect(validateReply(input)).toEqual([])
+  const diagram = '- ≡ **Diagram**\n  ```\n  a --> b\n  ```'
+  // exec: headings and L1 heads only (a head with no tail is drawn the same), plus the whole diagram.
+  expect(renderReply(input, 'exec')).toBe(`● **A**\n\n- ≡ **Plan**\n  - **${a}**\n  - **${c}**\n\n${diagram}`)
+  // full: the tail joins its head; L2 and L3 nest, and the table and code keep their indentation inside the list item.
+  expect(renderReply(input, 'full')).toBe(
+    [
+      '● **A**',
+      [
+        '- ≡ **Plan**',
+        `  - **${a}**: Tail one.`,
+        `    - **${b}**: Tail two.`,
+        '      - L3 bullet',
+        '      | x | y |',
+        '      | - | - |',
+        '      ```',
+        '      code under L3',
+        '      ```',
+        '      Free prose.',
+        `  - **${c}**`,
+      ].join('\n'),
+      diagram,
+    ].join('\n\n'),
   )
-  expect(renderReply({ headline: 'A', details }, 'tldr')).toBe('● **A**')
+  // A diagram section is not in tldr, and nothing else of the body is.
+  expect(renderReply(input, 'tldr')).toBe('● **A**')
+  // L3 prose runs on from the line above it unless that line ends in a hard break.
+  expect(renderReply({ headline: 'A', body: `**S**\n- ${a}: t.\n  - ${b}: t.\n    prose one.\n    prose two.` }, 'full')).toContain(
+    '    - **' + b + '**: t.  \n      prose one.  \n      prose two.',
+  )
+  // Without a heading the bullets are an unnamed section; its first line takes the icon after its list marker.
+  expect(renderReply({ headline: 'A', body: `- ${a}: Tail one.` }, 'exec')).toBe(`● **A**\n\n- ≡ **${a}**`)
+  // The terminal indents under a heading with a box; a head with children is in HEAD_UNITS.
+  for (const unit of ['bodySection', 'decision', 'caveat', 'linksHeading'] as const) expect(HEAD_UNITS).toContain(unit)
 })
 
 test('a headline-less reply, and a bold the model wrote itself', () => {
   expect(renderReply({ headline: 'One line.' }, 'exec')).toBe('● **One line.**')
   expect(renderReply({ headline: 'Has **already** bold' }, 'exec')).toBe('● Has **already** bold')
-  expect(renderReply({ headline: '', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }, 'exec')).toBe('◆ **Q?** V.\n\n◆ **R?** W.')
+  expect(renderReply({ headline: '', decision: { choice: 'Q?', options: [{ head: 'A', body: 'c.', stance: 'recommended' }] } }, 'tldr')).toBe('◇ **Q?** A')
   // The closing text opens with an invisible marker; the icon keeps a bold that starts on punctuation rendering.
   expect(closingText({ headline: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + '● **"Yes" it is.**')
   expect(closingText({ headline: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '● **Yes it is.**')
 })
 
-test('stance validation: exactly one recommended per decision, a known value on every option, picked no longer accepted', () => {
-  const withOptions = (options: unknown[]) => ({ headline: 'Ok.', decisions: [{ choice: 'Go?', pick: 'Yes.', options }] })
-  const o = (stance: string) => ({ name: 'A', consequence: 'c.', stance })
+test('the decision is one call with 2 to 4 whole plans: option count, exactly one recommended, a head of 8 to 15 words, a body of 3 sentences', () => {
+  const o = (stance: string, extra: Record<string, unknown> = {}) => ({ head: words(10), body: 'It costs a day.', stance, ...extra })
+  const withOptions = (options: unknown[], choice: unknown = 'Go?') => ({ headline: 'Ok.', decision: { choice, options } })
+  const plans = 'make each option a whole plan that bundles the sub-choices'
   expect(validateReply(withOptions([o('recommended'), o('option'), o('not_recommended')]))).toEqual([])
-  expect(validateReply(withOptions([o('option'), o('option')]))).toEqual(['decisions[0] has no option with stance recommended'])
+  expect(validateReply(withOptions([o('recommended'), o('option')]))).toEqual([])
+  expect(validateReply(withOptions([o('recommended'), o('option'), o('option'), o('option')]))).toEqual([])
+  expect(validateReply(withOptions([o('recommended')]))).toEqual([`decision has 1 option(s) (needs 2 to 4): ${plans}`])
+  expect(validateReply(withOptions([o('recommended'), o('option'), o('option'), o('option'), o('option')]))).toEqual([
+    `decision has 5 options (max 4): ${plans}`,
+  ])
+  expect(validateReply(withOptions([o('option'), o('option')]))).toEqual(['decision has no option with stance recommended'])
   expect(validateReply(withOptions([o('recommended'), o('recommended')]))).toEqual([
-    'decisions[0] has 2 options with stance recommended (exactly 1)',
+    'decision has 2 options with stance recommended (exactly 1)',
   ])
   expect(validateReply(withOptions([o('recommended'), o('green')]))).toEqual([
-    'decisions[0].options[1].stance should be one of recommended, option, not_recommended',
+    'decision.options[1].stance should be one of recommended, option, not_recommended',
   ])
-  const legacy = [{ name: 'A', consequence: 'c.', picked: true }, { name: 'B', consequence: 'c.', picked: false }]
-  expect(validateReply(withOptions(legacy)).length).toBeGreaterThan(0)
-  const props = REPLY_SCHEMA.properties.decisions.items.properties.options.items.properties as Record<string, unknown>
-  expect(Object.keys(props)).toEqual(['name', 'consequence', 'stance'])
+  // The choice is required, not blank, and at most 15 words.
+  expect(validateReply(withOptions([o('recommended'), o('option')], '  '))).toEqual([
+    'decision.choice is empty: ask the one call the user must make as a question',
+  ])
+  expect(validateReply({ headline: 'Ok.', decision: { options: [o('recommended'), o('option')] } })).toEqual(['decision.choice is missing'])
+  expect(validateReply(withOptions([o('recommended'), o('option')], words(15)))).toEqual([])
+  expect(validateReply(withOptions([o('recommended'), o('option')], words(16)))).toEqual([
+    'decision.choice has 16 words (max 15): ask the one call as a short question',
+  ])
+  // A head is a sentence of 8 to 15 words; a body is at most 3 sentences, and may list several things.
+  expect([MIN_HEAD_WORDS, MAX_HEAD_WORDS]).toEqual([8, 15])
+  for (const n of [8, 15]) expect(validateReply(withOptions([o('recommended', { head: words(n) }), o('option')]))).toEqual([])
+  for (const n of [7, 16]) {
+    expect(validateReply(withOptions([o('recommended', { head: words(n) }), o('option')]))).toEqual([
+      `decision.options[0].head has ${n} words (needs 8 to 15): say the plan as a sentence; the detail goes in body`,
+    ])
+  }
+  expect(validateReply(withOptions([o('recommended', { body: 'Fix A. Ticket B. Skip C.' }), o('option')]))).toEqual([])
+  expect(validateReply(withOptions([o('recommended', { body: 'Fix A. Ticket B. Skip C. Park D.' }), o('option')]))).toEqual([
+    'decision.options[0].body has 4 sentences (max 3)',
+  ])
+  // An option from before 0.1.14 (name, consequence) or 0.1.6 (picked) is told what to send; its lengths are not checked.
+  const oldOption = 'still has name and consequence: send head (a sentence of 8 to 15 words) and body (up to 3 sentences)'
+  expect(validateReply(withOptions([{ name: 'A', consequence: 'c.', stance: 'recommended' }, o('option')]))).toEqual([`decision.options[0] ${oldOption}`])
+  expect(validateReply(withOptions([{ name: 'A', consequence: 'c.', picked: true }, { name: 'B', consequence: 'c.', picked: false }])).length).toBeGreaterThan(0)
+  // An object sent as a JSON string is read as the object it encodes.
+  expect(validateReply({ headline: 'Ok.', decision: JSON.stringify({ choice: 'Go?', options: [o('recommended'), o('option')] }) })).toEqual([])
+  expect(validateReply({ headline: 'Ok.', decision: 5 })).toEqual(['decision should be an object'])
+  const props = REPLY_SCHEMA.properties.decision.properties.options.items.properties as Record<string, unknown>
+  expect(Object.keys(props)).toEqual(['head', 'body', 'stance'])
+  expect(Object.keys(REPLY_SCHEMA.properties.decision.properties)).toEqual(['choice', 'options'])
 })
 
-test('validation flags a bare id and a two-sentence verdict, and passes the worked example', () => {
+test('validation flags a bare id and a long body, scans caveats, and passes the worked example', () => {
   const issues = validateReply({
     headline: 'Yes.',
-    questions: [
-      { ask: 'Is it fixed?', verdict: 'Yes, in !441.' },
-      { ask: 'Is it fast?', verdict: 'Yes, 2x faster. Ships Monday.' },
-    ],
+    decision: {
+      choice: 'Go?',
+      options: [
+        { head: 'Fix it in !441 with a plan that has eight words', body: 'One. Two. Three. Four.', stance: 'recommended' },
+        { head: 'Wait for the next release train before we ship', body: 'Later.', stance: 'option' },
+      ],
+    },
   })
-  expect(issues).toEqual([
-    'questions[0].verdict has a bare id "!441"',
-    'questions[1].verdict has 2 sentences (max 1)',
-  ])
+  expect(issues).toEqual(['decision.options[0].head has a bare id "!441"', 'decision.options[0].body has 4 sentences (max 3)'])
   expect(validateReply(WORKED_EXAMPLE)).toEqual([])
-  expect(renderReply(WORKED_EXAMPLE, 'exec')).toBe(EXEC)
-  expect(validateReply({})).toEqual(['headline is missing (headline: shortest possible answer, at most 8 words; move context into summary)'])
+  expect(validateReply({})).toEqual(['headline is missing (headline: a summary of the whole reply in at most 3 sentences and 60 words)'])
+
+  // Caveats: at most 3, each `text` at most 2 sentences and 40 words and scanned, `details` free; a string reads as `{ text }`.
+  const caveat = (text: unknown, details?: unknown) => ({ headline: 'A', caveats: [{ text, details }] })
+  expect(validateReply({ headline: 'A', caveats: ['One.', { text: 'Two.' }, { text: 'Three.', details: 'See src/a.ts and !441. Many. Sentences. Here. Free.' }] })).toEqual([])
+  expect(validateReply({ headline: 'A', caveats: ['1.', '2.', '3.', '4.'] })).toEqual(['caveats has 4 entries (max 3)'])
+  expect(validateReply(caveat('One. Two.'))).toEqual([])
+  expect(validateReply(caveat('One. Two. Three.'))).toEqual(['caveats[0].text has 3 sentences (max 2)'])
+  expect(validateReply(caveat(words(40)))).toEqual([])
+  expect(validateReply(caveat(words(41)))).toEqual(['caveats[0].text has 41 words (max 40): keep the point and put the evidence in details'])
+  expect(validateReply(caveat('See `src/a.ts` now.')).length).toBe(2)
+  expect(validateReply({ headline: 'A', caveats: [7] })).toEqual(['caveats[0] should be an object'])
+  expect(validateReply({ headline: 'A', caveats: [{ details: 'x' }] })).toEqual(['caveats[0].text is missing'])
 })
 
-const FIX = 'headline: shortest possible answer, at most 8 words; move context into summary'
+const FIX = 'headline: a summary of the whole reply in at most 3 sentences and 60 words'
 
-test('headline is the shortest possible answer: over 8 words, a colon or a second sentence is rejected, with the fix in the message', () => {
+test('headline summarizes the whole reply: up to 3 sentences and 60 words, with the fix in the message', () => {
   expect(validateReply({ headline: 'JSON' })).toEqual([])
-  expect(validateReply({ headline: 'JSON for config, spaces for code' })).toEqual([])
-  expect(validateReply({ headline: 'One two three four five six seven eight' })).toEqual([])
-  expect(validateReply({ headline: 'One two three four five six seven eight nine' })).toEqual([`headline has 9 words (max 8): ${FIX}`])
-  expect(validateReply({ headline: 'JSON: it is strict' })).toEqual([`headline has a colon: ${FIX}`])
-  expect(validateReply({ headline: 'JSON. Spaces.' })).toEqual([`headline has 2 sentences (max 1): ${FIX}`])
+  expect(validateReply({ headline: 'JSON: it is strict. Spaces win by hand. Pick one.' })).toEqual([])
+  expect(validateReply({ headline: words(60) })).toEqual([])
+  // `**` markers do not count as words.
+  expect(validateReply({ headline: `**${words(60)}**` })).toEqual([])
+  expect(validateReply({ headline: words(61) })).toEqual([`headline has 61 words (max 60): ${FIX}`])
+  expect(validateReply({ headline: 'JSON. Spaces. Tabs. Both.' })).toEqual([`headline has 4 sentences (max 3): ${FIX}`])
   expect(validateReply({ headline: '   ' })).toEqual([`headline is empty (${FIX})`])
   expect(validateReply({ headline: 5 })).toEqual(['headline should be a string'])
-  // The old long bottom line is exactly what the owner wants gone from the top.
-  const issues = validateReply({
-    headline: 'For app config, JSON is the safer default because it is strict and parses the same everywhere, while YAML wins only when people edit by hand.',
-  })
-  expect(issues).toHaveLength(1)
-  expect(issues[0]).toContain('words (max 8)')
-  expect(issues[0]).toContain('move context into summary')
-  // A headline carries no id, URL, code or path either.
+  // A headline carries no id, URL, code or path.
   expect(validateReply({ headline: 'Fixed in !441' })).toEqual(['headline has a bare id "!441"'])
 })
 
-test('summary is 1 to 2 sentences of context and optional', () => {
-  expect(validateReply({ headline: 'JSON', summary: 'It is strict. It parses the same everywhere.' })).toEqual([])
-  expect(validateReply({ headline: 'JSON', summary: 'One. Two. Three.' })).toEqual([
-    'summary has 3 sentences (max 2): write 1 to 2 sentences of context; move the rest into details',
-  ])
-  expect(validateReply({ headline: 'JSON', summary: 7 })).toEqual(['summary should be a string'])
-  expect(validateReply({ headline: 'JSON', summary: 'See `a.ts` now.' })).toHaveLength(2)
-})
-
-test('summary is plain text right under the bold headline in full only, and absent from tldr and exec', () => {
-  const input = { headline: 'JSON', summary: 'It is strict and parses the same everywhere.' }
-  expect(renderReply(input, 'tldr')).toBe('● **JSON**')
-  expect(renderReply(input, 'exec')).toBe('● **JSON**')
-  expect(renderReply(input, 'full')).toBe('● **JSON**  \nIt is strict and parses the same everywhere.')
-  expect(closingText(input, 'tldr')).toBe(CLOSING_MARK + '● **JSON**')
-  expect(renderReply({ headline: 'JSON', summary: '  ' }, 'exec')).toBe('● **JSON**')
-})
-
-test('the contract and the schema lead with headline and summary; answer is gone', () => {
+test('the contract and the schema lead with headline and body, state the length ladder, and say nothing of a section count; removed fields get an issue', () => {
   const props = REPLY_SCHEMA.properties as Record<string, unknown>
-  expect(Object.keys(props).slice(0, 2)).toEqual(['headline', 'summary'])
-  expect(props.answer).toBeUndefined()
+  expect(Object.keys(props)).toEqual(['headline', 'body', 'decision', 'caveats', 'links'])
+  for (const gone of ['answer', 'summary', 'status', 'details', 'next', 'questions', 'decisions']) expect(props[gone]).toBeUndefined()
   expect(REPLY_SCHEMA.required).toEqual(['headline'])
-  expect(CONTRACT).not.toMatch(/"answer"|"answer":/)
-  expect(CONTRACT).toContain('shortest possible answer')
-  expect(CONTRACT).toContain('"headline":"Checkout fixed; ship Friday"')
+  expect(REPLY_SCHEMA.additionalProperties).toBe(false)
+  expect(CONTRACT).not.toMatch(/"answer"|"questions"|"decisions"|"pick"|"summary"|"status"|"next"/)
+  expect(CONTRACT).toContain('"headline":"Safari checkout is fixed and ready to release.')
+  // The rules and the example reach the tool's own description too, not only the system-prompt section.
+  for (const text of [CONTRACT, toolSpec(true).description]) {
+    expect(text).toContain('At most one `decision`')
+    expect(text).toContain('Say each fact once')
+    expect(text).toContain('never repeat the headline')
+    expect(text).toContain('Every L1 and L2 bullet is `head: tail` with an 8 to 15 word head that reads as a sentence; L1 tails are one sentence, L2 tails up to two.')
+    expect(text).toContain('L3 is freeform markdown (tables, code, lists) for evidence and detail')
+    expect(text).toContain('Only when the user asks for a diagram: give it its own section, a heading followed by one fenced code block')
+    expect(text).toContain('"decision":{"choice":"How should we release the fix?"')
+    expect(text).not.toContain('verdict')
+    // The number of sections is not limited, and the text does not hint at a limit.
+    expect(text).not.toMatch(/\d+ sections|sections? \(max|number of sections|section count|max(imum)? sections/i)
+  }
+  // A new call that still sends a removed field is turned away with where its content goes now.
   expect(validateReply({ answer: 'Yes.' })).toEqual([`answer is no longer a field: send ${FIX}`])
-})
-
-test('a reply from before 0.1.9 (answer, no headline) still draws its answer as the headline, and a headline wins over a stray answer', () => {
-  const old = { answer: 'Checkout is fixed; one call needed on the release date.', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }] }
-  const answer = '● **Checkout is fixed; one call needed on the release date.**'
-  expect(renderReply(old, 'tldr')).toBe(answer)
-  for (const view of ['exec', 'full'] as const) expect(renderReply(old, view)).toBe(answer + '\n\n◆ **Q?** V.\n\n◆ **R?** W.')
-  expect(renderReply({ answer: 'Old.', headline: 'New' }, 'exec')).toBe('● **New**')
-})
-
-const why1 = (question: Record<string, unknown>) => ({ headline: 'A.', questions: [{ ask: 'Q?', verdict: 'V.', ...question }, { ask: 'R?', verdict: 'W.' }] })
-
-test('why is one line that states the reason: a generic label, a colon or a second sentence is rejected', () => {
-  expect(validateReply(why1({ why: 'JSON fails loudly; YAML can change values silently' }))).toEqual([])
-  for (const label of ['Why', 'why:', 'Because', 'Reason.', 'Details', 'The reason']) {
-    expect(validateReply(why1({ why: label })), label).toEqual([`questions[0].why is a generic label ("${label}"): write the reason itself as a one-line headline`])
+  const removed = {
+    summary: 'summary is no longer a field: fold it into the headline (at most 3 sentences and 60 words)',
+    status: 'status is no longer a field: put it in the body, as a section of bullets',
+    details: 'details is no longer a field: put it in the body, as L2 and L3 bullets under the L1 bullet they support',
+    next: 'next is no longer a field: drop it, or make it a decision option',
+    questions: 'questions is no longer a field: answer in the headline, and give each question its own body section when there are several',
+    decisions: 'decisions is no longer a field: send one decision whose 2 to 4 options are whole plans',
   }
-  expect(validateReply(why1({ why: 'Because of this:' }))).toHaveLength(1)
-  expect(validateReply(why1({ why: 'Reason: it is faster' }))).toEqual(['questions[0].why has a colon: write one headline sentence that states the reason'])
-  expect(validateReply(why1({ why: 'It is faster. It is also safer.' }))).toEqual(['questions[0].why has 2 sentences (max 1)'])
-  expect(validateReply(why1({ why: 'Meets at 10:00 sharp' }))).toEqual([])
+  for (const [key, issue] of Object.entries(removed)) expect(validateReply({ headline: 'A', [key]: LEGACY[key as keyof typeof LEGACY] ?? 'x' })).toEqual([issue])
+  expect(validateReply({ headline: 'A', status: 5 })).toEqual([removed.status])
+  expect(validateReply({ headline: 'A', summary: 'S.', status: 's', details: 'd', next: 'n' })).toHaveLength(4)
 })
 
-test('details without a why are the questions own bullets in full only; with a why, prose follows the headline and lists nest', () => {
-  const noWhy = why1({ details: 'Some prose.\n- **Pick**: JSON\n  - nested\n- plain' })
-  expect(renderReply(noWhy, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n\n◆ **R?** W.')
-  expect(renderReply(noWhy, 'full')).toBe('● **A.**\n\n◆ **Q?** V.\n- Some prose.\n- **Pick**: JSON\n  - nested\n- plain\n\n◆ **R?** W.')
-  const both = why1({ why: 'JSON fails loudly', details: 'No coercion traps.\n- **Pick JSON when**: machines write it\n- Pick YAML when: humans edit it' })
-  // The reason headline is exec now (reason 2); its prose and the evidence stay full.
-  expect(renderReply(both, 'exec')).toBe('● **A.**\n\n◆ **Q?** V.\n- **JSON fails loudly**\n\n◆ **R?** W.')
-  expect(renderReply(both, 'tldr')).toBe('● **A.**')
-  expect(renderReply(both, 'full')).toBe(
-    '● **A.**\n\n◆ **Q?** V.\n- **JSON fails loudly**: No coercion traps.\n  - **Pick JSON when**: machines write it\n  - **Pick YAML when**: humans edit it\n\n◆ **R?** W.',
+test('a past reply still redraws: status, details, next, summary (before 0.1.14), questions and decisions[] (before 0.1.13), answer for headline (before 0.1.9), picked (before 0.1.6)', () => {
+  const head = '● **Checkout fixed; ship Friday**'
+  const summary = 'The retry now covers the timeout path.'
+  const status = nest('▸ **Waiting on you**', '- **QA sign-off**: needed by Thursday')
+  const statusSub = '  - Regression suite is green'
+  const q1 = '◆ **Does checkout still fail on Safari?** No, the failure rate fell from 4% to 0.1%.'
+  const why = '- **The retry now covers the timeout path**'
+  const q2 = '◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.'
+  const d = '◇ **Ship Friday or wait a week?** Ship Friday'
+  const heads = ['- [Recommended] **Ship Friday**', '- **Wait a week**']
+  const bodies = [': Customers get the fix 5 days sooner.', ': One more regression pass.']
+  const next = '→ Want me to draft the QA sign-off request?'
+  const rollout = nest('≡ **Rollout**', '- **Canary**: 5% on Thursday', '  - Watch the error dashboard for 2 hours')
+  // The reply is drawn where its fields used to go: status after the headline, details and next after the caveat.
+  expect(renderReply(LEGACY, 'tldr')).toBe([head, d, next, LINK].join('\n\n'))
+  expect(renderReply(LEGACY, 'exec')).toBe(
+    [head, status, nest(q1, why), q2, nest(d, ...heads), CAVEAT, next, nest('↗ **Links**', LINK)].join('\n\n'),
   )
-})
-
-test('an old multi-sentence why draws its first sentence as the headline, the rest then the old details in full only', () => {
-  const old = why1({ why: 'The retry covers the timeout path. It was the only gap, e.g. 5 files.', details: '- Fix: wrapper' })
-  expect(renderReply(old, 'exec')).toContain('- **The retry covers the timeout path**\n')
-  expect(renderReply(old, 'exec')).not.toContain('It was the only gap')
-  expect(renderReply(old, 'full')).toContain('◆ **Q?** V.\n- **The retry covers the timeout path**: It was')
-  expect(renderReply(old, 'full')).toContain('- **The retry covers the timeout path**: It was the only gap, e.g. 5 files.\n  - **Fix**: wrapper')
-})
-
-test('no generic Why or Details label is ever drawn, in any view', () => {
-  for (const input of [SAMPLE, why1({ why: 'Short reason', details: 'x' }), why1({ details: 'x\n- y' }), why1({ why: 'A. B.', details: '- c' })]) {
-    for (const view of ['tldr', 'exec', 'full'] as const) {
-      expect(renderReply(input, view)).not.toMatch(/\*\*(Why|Details)\*\*/i)
-    }
-  }
+  const evidence = ['  - **Fix**: retry wrapper in `checkout/pay.ts`', '  - MR !441']
+  expect(renderReply(LEGACY, 'full')).toBe(
+    [
+      `${head}  \n${summary}`,
+      nest('▸ **Waiting on you**', '- **QA sign-off**: needed by Thursday', statusSub),
+      nest(q1, why + ': The timeout path was the only one that dropped the session.', ...evidence),
+      q2,
+      nest(d, ...heads.map((h, i) => h + bodies[i])),
+      CAVEAT,
+      rollout,
+      next,
+      nest('↗ **Links**', LINK),
+    ].join('\n\n'),
+  )
+  // A multi-sentence `why`: the first sentence is the reason, the rest follows it in full only.
+  const long = { headline: 'A.', questions: [{ ask: 'Q?', verdict: 'V.', why: 'The retry covers the timeout path. It was the only gap, e.g. 5 files.', details: '- Fix: wrapper' }] }
+  expect(renderReply(long, 'exec')).toBe('● **A.**\n\n- ◆ **Q?** V.\n  - **The retry covers the timeout path**')
+  expect(renderReply(long, 'full')).toContain('  - **The retry covers the timeout path**: It was the only gap, e.g. 5 files.\n    - **Fix**: wrapper')
+  // A 0.1.13 decision (options with name and consequence) draws as head and body.
+  const v0113 = { headline: 'A', decision: { choice: 'Go?', options: [{ name: 'Stay', consequence: 'd.', stance: 'option' }, { name: 'Go', consequence: 'c.', stance: 'recommended' }] } }
+  expect(renderReply(v0113, 'exec')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**\n  - **Stay**')
+  expect(renderReply(v0113, 'full')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**: c.\n  - **Stay**: d.')
+  // An `answer` is drawn as the headline (a headline wins over a stray one); `picked` reads as the stance.
+  const old = { answer: 'A.', decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Stay', consequence: 'd.', picked: false }, { name: 'Go', consequence: 'c.', picked: true }] }] }
+  expect(renderReply(old, 'exec')).toBe('● **A.**\n\n- ◇ **Go?** Yes.\n  - [Recommended] **Go**\n  - **Stay**')
+  expect(renderReply(old, 'tldr')).toBe('● **A.**\n\n◇ **Go?** Yes.')
+  expect(renderReply({ answer: 'Old.', headline: 'New' }, 'exec')).toBe('● **New**')
+  // A malformed old field draws as nothing and never throws.
+  expect(renderReply({ headline: 'A', questions: 'nope', decisions: [5, { choice: 7 }], status: 5, details: [], next: {}, summary: 3 }, 'full')).toBe('● **A**')
 })
 
 test('links draw as just the label: [label](url), no path text; only an absolute path or an http(s) URL is a link', () => {
@@ -501,7 +594,7 @@ test('links draw as just the label: [label](url), no path text; only an absolute
   ].join('\n')
   expect(renderReply({ headline: 'Done.', links }, 'tldr')).toBe('● **Done.**\n\n' + list)
   // exec and full carry a bold Links heading; tldr has none.
-  expect(renderReply({ headline: 'Done.', links }, 'exec')).toBe('● **Done.**\n\n↗ **Links**\n' + list)
+  expect(renderReply({ headline: 'Done.', links }, 'exec')).toBe('● **Done.**\n\n' + nest('↗ **Links**', ...list.split('\n')))
   expect(renderReply({ headline: 'Done.', links }, 'tldr')).not.toContain('Links')
   expect(validateReply({ ...WORKED_EXAMPLE, links })).toEqual(['links[0].path should be an absolute path or an http(s) URL'])
 })
@@ -522,11 +615,13 @@ test('Windows drive and UNC paths are accepted and drawn as file URLs behind the
 })
 
 test('literal backslash-n escapes become real line breaks, except in code spans or when real newlines exist', () => {
+  const eight = 'one two three four five six seven eight'
   expect(renderReply({ headline: 'a\\r\\nb\\tc' }, 'full')).toBe('● **a**  \n**b\tc**')
   expect(renderReply({ headline: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('● **Run `printf "a\\nb"`**  \n**Done**')
-  const full = renderReply({ headline: 'A', questions: [{ ask: 'Q?', verdict: 'V.', details: 'x\\ny' }, { ask: 'R?', verdict: 'W.' }], details: 'p\\nq' }, 'full')
-  expect(full).toContain('◆ **Q?** V.\n- x\n- y')
-  expect(full.endsWith('p  \nq')).toBe(true)
+  const escaped = { headline: 'A', body: `**S**\\n- ${eight}: t.\\n  - ${eight} too: t.` }
+  expect(validateReply(escaped)).toEqual([])
+  expect(renderReply(escaped, 'exec')).toContain(`- ≡ **S**\n  - **${eight}**`)
+  expect(renderReply({ headline: 'A', caveats: [{ text: 'T.', details: 'a\\nb' }] }, 'full')).toContain('- ⚠ T.\n  - a\n  - b')
   // A Windows path in a link is never touched.
   expect(renderReply({ headline: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
 })
@@ -550,32 +645,46 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
   const markdown = (await ui.findAll({ type: 'Markdown' })).map(node => node.text).join('\n\n')
   expect(markdown).toContain(HEAD)
-  expect(markdown.includes(SUMMARY)).toBe(view === 'full')
-  if (view === 'full') expect(markdown).toContain(TOP)
-  expect(markdown.includes(STATUS_BULLET)).toBe(view !== 'tldr')
-  expect(markdown.includes(STATUS_SUB)).toBe(view === 'full')
+  // The body: headings and L1 heads from exec, tails, L2, L3 (a table here) and caveat details in full only.
+  expect(markdown.includes(SECTION_1)).toBe(view !== 'tldr')
+  expect(markdown.includes(L1_1)).toBe(view !== 'tldr')
+  expect(markdown.includes(L1_1 + L1_1_TAIL)).toBe(view === 'full')
+  expect(markdown.includes('retry wrapper')).toBe(view === 'full')
+  // The table keeps its indentation under its L2 bullet, inside the box as in the markdown path.
+  expect(markdown.includes(`${L2_2}\n${TABLE.join('\n')}`)).toBe(view === 'full')
+  expect(markdown.includes(CAVEAT)).toBe(view !== 'tldr')
+  expect(markdown.includes('Only Safari 17')).toBe(view === 'full')
   expect(markdown).toContain(D1)
   expect(markdown).not.toContain('file:///')
   expect(markdown).not.toContain('Decision')
   expect(JSON.stringify(await ui.drawn())).not.toContain('cyan')
-  expect(markdown.includes(Q1)).toBe(view !== 'tldr')
-  expect(markdown.includes(WHY)).toBe(view !== 'tldr')
-  expect(markdown.includes(WHY + ': The timeout path was')).toBe(view === 'full')
-  expect(markdown).not.toMatch(/\*\*(Why|Details)\*\*/)
-  expect(markdown.includes('  - Watch the error dashboard')).toBe(view === 'full')
   const props = async (pattern: RegExp) => (await ui.find({ type: 'Text', text: pattern }))?.props
   if (view === 'tldr') {
     expect(await props(/Recommended/)).toBeUndefined()
     expect(markdown).not.toContain('Links')
   } else {
     expect(await props(/^\[Recommended\] $/)).toMatchObject({ color: 'green', weight: 'bold' })
-    expect(await props(/^Ship Friday$/)).toMatchObject({ color: 'green', weight: 'bold' })
-    expect(await props(/^Wait a week$/)).toMatchObject({ color: 'blue', weight: 'bold' })
-    expect(await props(/^Skip QA$/)).toMatchObject({ color: 'red', weight: 'bold' })
+    expect(await props(new RegExp(`^${PICK}$`))).toMatchObject({ color: 'green', weight: 'bold' })
+    expect(await props(/^Wait a week and run the full regression pass first$/)).toMatchObject({ color: 'blue', weight: 'bold' })
+    expect(await props(/^Ship today to everyone and skip the QA sign-off entirely$/)).toMatchObject({ color: 'red', weight: 'bold' })
     expect(markdown).toContain('↗ **Links**')
-    expect(await props(/^: Customers get the fix 5 days sooner.$/)).toBeDefined()
+    // An option's body joins its head as plain text in full only.
+    expect((await props(/^: Customers get the fix 5 days sooner/)) !== undefined).toBe(view === 'full')
   }
-  expect((await ui.find({ type: 'Link' }))?.props).toMatchObject({ href: 'file:///home/me/reports/checkout.html' })
+  const link = await ui.find({ type: 'Link' })
+  expect(link?.props).toMatchObject({ href: 'file:///home/me/reports/checkout.html' })
+  // The label is a blue Text inside the Link; the `- ` marker beside it keeps the default color.
+  expect(link?.children).toMatchObject([{ type: 'Text', props: { color: 'blue' }, children: ['Test report'] }])
+  const row = await ui.find({ type: 'Text', text: /Test report/ })
+  expect(row?.props).toEqual({})
+  expect(row?.children[0]).toBe('- ')
+  // Under a head the terminal indents with a box two cells in, the head outside it; the markdown inside stays flat.
+  const indented = (await ui.findAll({ type: 'Box' })).filter(box => box.props.paddingLeft === 2).map(box => box.text).join('\n')
+  expect(markdown).not.toMatch(/^- [▸◆◇↗≡⚠]/m)
+  expect(indented.includes(L1_1)).toBe(view !== 'tldr')
+  expect(indented).not.toContain(SECTION_1)
+  expect(indented).not.toContain(D1)
+  expect(indented.includes(CAVEAT_DETAILS)).toBe(view === 'full')
 }
 
 const harness = (on: On, isStoreMocked = true) => {
@@ -605,12 +714,21 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await run($, 'reply', 'exec')
 
-  const bad = { headline: 'Yes.', questions: [{ ask: 'Done?', verdict: 'Done in !441.' }, { ask: 'Ok?', verdict: 'Yes.' }] }
+  const bad = {
+    headline: 'Yes.',
+    decision: {
+      choice: 'Ship it?',
+      options: [
+        { head: 'Ship it now with the plan that was agreed earlier', body: 'Done in !441.', stance: 'recommended' },
+        { head: 'Wait for the next release train before we ship anything', body: 'Later.', stance: 'option' },
+      ],
+    },
+  }
   await $.turn.start({ text: 'q', turnId: 't1' })
   for (const round of [1, 2]) {
     const rejected = await respond($, bad)
     expect(rejected.deny, `rejection ${round}`).toContain('1 issue(s)')
-    expect(rejected.deny).toContain('questions[0].verdict has a bare id "!441"')
+    expect(rejected.deny).toContain('decision.options[0].body has a bare id "!441"')
   }
   // Before delivery a step goes to the model.
   const draw = async (index: number, loop: { turnId: string; agentId?: string } = { turnId: 't1' }) => {
@@ -626,7 +744,7 @@ test('respond rejects a bad reply twice per turn, then accepts it; a clean reply
   expect(accepted.result).toBe('delivered')
   // After delivery the next step is answered by the mod with an invisible text: no request, no nudge.
   const closing = await draw(1)
-  expect(closing.answer).toBe(closingText(bad, 'full'))
+  expect(closing.answer).toBe(closingText(bad, 'exec'))
   expect(closing.answer.startsWith(CLOSING_MARK)).toBe(true)
   expect(closing.toolUses).toEqual([])
   expect(engine.steps).toBe(1)
@@ -669,7 +787,7 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
   const ROW = {
     tool_use_id: 'tu1',
     tool: RESPOND,
-    input: SAMPLE,
+    input: WORKED_EXAMPLE,
     isRunning: false,
     isErrored: false,
     isInterrupted: false,
@@ -679,7 +797,13 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
     if (surface === 'terminal') {
       await expectTerminalReply(reply, 'full')
     } else {
-      expect((await reply.find({ type: 'Markdown' }))?.text).toBe(FULL)
+      // The hook drew (not the engine's own row) and the tree validates; markdown cannot nest a list under a paragraph,
+      // so a heading is a list item with its lines nested under it, and so is the closing text a surface without a row shows.
+      expect(await reply.drawn()).toMatchObject({ type: 'Markdown' })
+      const text = (await reply.find({ type: 'Markdown' }))?.text
+      expect(text).toBe(FULL)
+      expect(text).toContain(S1_FULL)
+      expect(closingText(WORKED_EXAMPLE, 'full')).toContain(S1_FULL)
     }
     expect(await reply.find({ type: 'Text', text: /\/reply|full ·/ })).toBeUndefined()
     await reply.unmount()
@@ -707,7 +831,7 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
     const closing = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'AssistantMessage', props: { text: '\u200b', isFirstOfReply: false }, requestId: 'am1' })
     expect(await closing.drawn()).toMatchObject({ type: 'Box', props: { display: 'none' } })
     await closing.unmount()
-    const marked = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'AssistantMessage', props: { text: closingText(SAMPLE, 'exec'), isFirstOfReply: false }, requestId: 'am3' })
+    const marked = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'AssistantMessage', props: { text: closingText(WORKED_EXAMPLE, 'exec'), isFirstOfReply: false }, requestId: 'am3' })
     expect(await marked.drawn()).toMatchObject({ type: 'Box', props: { display: 'none' } })
     await marked.unmount()
     const plain = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'AssistantMessage', props: { text: 'hi', isFirstOfReply: true }, requestId: 'am2' })
@@ -750,7 +874,7 @@ test('reply-tool starts off whatever was stored, /reply takes off|tldr|exec|full
   expect(registered.at(-1)?.isDeferred).toBe(false)
   expect(registered).toHaveLength(2)
 
-  const row = { tool_use_id: 'tu1', tool: RESPOND, input: SAMPLE, isRunning: false, isErrored: false, isInterrupted: false }
+  const row = { tool_use_id: 'tu1', tool: RESPOND, input: WORKED_EXAMPLE, isRunning: false, isErrored: false, isInterrupted: false }
   const ui = await $.ui.mount({ plugin: 'reply-tool', surface: 'terminal', component: 'ToolUse', props: row, requestId: 'tu1' })
   // No view footer under a reply, whatever the setting; the setting shows in the bottom-bar indicator instead.
   const footer = async () => (await ui.find({ type: 'Text', text: /\/reply|·/ }))?.text
@@ -812,11 +936,11 @@ test('a respond call while reply-tool is off is turned away for good', async ($,
 
 test('the closing text is the marked reply at the view, and only a marked or bare closing text is hidden', () => {
   for (const view of ['tldr', 'exec', 'full'] as const) {
-    const text = closingText(SAMPLE, view)
-    expect(text).toBe(CLOSING_MARK + renderReply(SAMPLE, view).trim())
+    const text = closingText(WORKED_EXAMPLE, view)
+    expect(text).toBe(CLOSING_MARK + renderReply(WORKED_EXAMPLE, view).trim())
     expect(CLOSING_MATCHER.test(text)).toBe(true)
   }
-  expect(closingText(SAMPLE, 'tldr')).not.toBe(closingText(SAMPLE, 'full'))
+  expect(closingText(WORKED_EXAMPLE, 'tldr')).not.toBe(closingText(WORKED_EXAMPLE, 'full'))
   // An empty reply falls back to the bare invisible text.
   expect(closingText({}, 'exec')).toBe('​')
   expect(CLOSING_MATCHER.test('​')).toBe(true)
@@ -829,31 +953,95 @@ test('the indicator reads <setting> while on and nothing while off', () => {
   for (const mode of ['tldr', 'exec', 'full'] as const) expect(indicatorText(mode)).toBe(mode)
 })
 
-test('status is a second outline right after the headline: exec shows headings and top-level bullets, full the nested ones', () => {
-  const status = '**Active today**\n- **Build**: running\n  - step one\n\n**Waiting on you**\n- **Approval**: needed'
-  const input = { headline: 'A', summary: 'S.', questions: [{ ask: 'Q?', verdict: 'V.' }, { ask: 'R?', verdict: 'W.' }], status, details: '**Shipped**\n- **Old**: done' }
-  expect(renderReply(input, 'tldr')).toBe('● **A**')
-  expect(renderReply(input, 'exec')).toBe(
-    '● **A**\n\n▸ **Active today**\n- **Build**: running\n\n▸ **Waiting on you**\n- **Approval**: needed\n\n◆ **Q?** V.\n\n◆ **R?** W.',
-  )
-  const full = renderReply(input, 'full')
-  expect(full).toBe(
-    '● **A**  \nS.\n\n▸ **Active today**\n- **Build**: running\n  - step one\n\n▸ **Waiting on you**\n- **Approval**: needed\n\n◆ **Q?** V.\n\n◆ **R?** W.\n\n≡ **Shipped**\n- **Old**: done',
-  )
-  expect(renderReply(input, 'full', 'emoji')).toContain('📍 **Active today**')
-  expect(LEVELS.statusSection).toBe(2)
-  expect(LEVELS.statusBullet).toBe(2)
-  expect(LEVELS.statusSub).toBe(3)
-  expect(ICONS.glyph.status).toBe('▸')
-  expect(ICONS.emoji.status).toBe('📍')
-  expect(validateReply(input)).toEqual([])
-  expect(validateReply({ headline: 'A', status: 5 })).toEqual(['status should be a string'])
+test('body is an outline: a head of 8 to 15 words per L1 and L2 bullet, tails of 1 and 2 sentences, 3 levels, L3 free, no ids in headings or L1, no repeats of the headline', () => {
+  const check = (...rows: string[]) => validateReply({ headline: 'Done.', body: rows.join('\n') })
+  const l1 = (head: string, tail = 'Tail.') => `- ${head}: ${tail}`
+  const l2 = (head: string, tail = 'Tail.') => `  - ${head}: ${tail}`
+  const head = (level: number, n: number) =>
+    `body L${level} bullet "w0 w1 w2 w3 w4 w5${n > 6 ? '...' : ''}" has a head of ${n} words (needs 8 to 15): write the head as a sentence, then ": tail"`
+  const tail = (level: number, n: number, max: number) =>
+    `body L${level} bullet "w0 w1 w2 w3 w4 w5..." has a tail of ${n} sentences (max ${max}): put the rest in an L${level + 1} bullet`
+
+  // The head is the text before the first colon followed by a space or the line end; 8 to 15 words, `**` markers ignored.
+  for (const n of [8, 15]) {
+    expect(check('**S**', l1(words(n)))).toEqual([])
+    expect(check('**S**', l1(words(9)), l2(words(n)))).toEqual([])
+  }
+  expect(check('**S**', l1(words(7)))).toEqual([head(1, 7)])
+  expect(check('**S**', l1(words(16)))).toEqual([head(1, 16)])
+  expect(check('**S**', l1(words(9)), l2(words(7)))).toEqual([head(2, 7)])
+  expect(check('**S**', l1(words(9)), l2(words(16)))).toEqual([head(2, 16)])
+  // No colon: the whole bullet is the head and the tail is empty. A time or a URL is not a colon; a bold head may hold its colon.
+  expect(check('**S**', `- ${words(8)}`)).toEqual([])
+  expect(check('**S**', `- ${words(7)}`)).toEqual([head(1, 7)])
+  expect(check('**S**', `- ${words(7)} at 10:00`)).toEqual([])
+  expect(check('**S**', `- **${words(8)}**: tail`)).toEqual([])
+  expect(check('**S**', `- **${words(8)}:** tail`)).toEqual([])
+  // Tails: an L1 tail is at most 1 sentence, an L2 tail at most 2.
+  expect(check('**S**', l1(words(9), 'One. Two.'))).toEqual([tail(1, 2, 1)])
+  expect(check('**S**', l1(words(9)), l2(words(9), 'One. Two.'))).toEqual([])
+  expect(check('**S**', l1(words(9)), l2(words(9), 'One. Two. Three.'))).toEqual([tail(2, 3, 2)])
+  // L3 is free: no head, a path, an id, 4 sentences, a table, code, prose and a quote, all unchecked.
+  expect(
+    check(
+      '**S**',
+      l1(words(9)),
+      l2(words(9)),
+      '    - see src/a.ts and !441. One. Two. Three. Four.',
+      '    | a | b |',
+      '    | - | - |',
+      '    ```',
+      '    anything: ## at all',
+      '    ```',
+      '    > a quote, and prose',
+    ),
+  ).toEqual([])
+  // 4 levels of bullets are turned away, and only bullets count.
+  const deep = 'body section "S" goes 4 levels deep (max 3): condense the top levels'
+  expect(check('**S**', l1(words(9)), l2(words(9)), '    - three', '      - four')).toEqual([deep])
+  expect(check('# S', l1(words(9)), l2(words(9)), '    - three', '    | a | b |', '    | - | - |')).toEqual([])
+  // Ids, paths, URLs and code are rejected in a heading and an L1 head or tail, and allowed from L2 down.
+  expect(check('**S**', l1(`${words(8)} in src/a.ts`))).toEqual([`body L1 bullet "w0 w1 w2 w3 w4 w5..." has a file path "a.ts"`])
+  expect(check('**S**', l1(words(9), 'see !441.'))).toEqual([`body L1 bullet "w0 w1 w2 w3 w4 w5..." has a bare id "!441"`])
+  expect(check('**S**', l1(words(9)), l2(`${words(8)} in src/a.ts`, 'see !441 and `x`.'))).toEqual([])
+  expect(check('**Fix !441**', l1(words(9)))).toEqual(['body heading "Fix !441" has a bare id "!441"'])
+  // A heading is at most 10 words, with no minimum; `#` and bold-only lines both head a section; bullets may come first.
+  expect(check(`**${words(10)}**`, l1(words(9)))).toEqual([])
+  expect(check(`# ${words(11)}`, l1(words(9)))).toEqual([`body heading "${words(11)}" has 11 words (max 10): shorten it`])
+  expect(check('**Why**', l1(words(9)), '**Next steps for the team**', l1(words(9)))).toEqual([])
+  expect(check(l1(words(9)), '**S**', l1(words(9)))).toEqual([])
+  // The number of sections is not limited.
+  expect(check(...Array.from({ length: 12 }, (_, i) => [`**Section ${i}**`, l1(words(9))]).flat())).toEqual([])
+  // Every other line is a heading or a bullet.
+  expect(check('**S**', 'Some plain text here, as a paragraph.')).toEqual(['body: write "Some plain text here, as a..." as a bullet under a heading'])
+  expect(check('**S**', l1(words(9)), '  indented text under an L1 bullet')).toEqual(['body: write "indented text under an L1 bullet" as a bullet under a heading'])
+  // A table or code block is nested under a bullet (L2 or deeper), never at the top of a section.
+  expect(check('**S**', '| a | b |', '| - | - |')).toEqual(['body section "S" has a top-level table: nest it under a bullet (L2 or deeper)'])
+  expect(check('**S**', l1(words(9)), '  | a | b |', '  | - | - |', '  ```', '  code', '  ```')).toEqual([])
+  const mixed =
+    'body section "S" has a top-level code block: nest it under a bullet (L2 or deeper), or give the diagram its own section with the code block as its only content'
+  expect(check('**S**', l1(words(9)), '```', 'a --> b', '```')).toEqual([mixed])
+  expect(check('**S**', '```', 'a --> b', '```', '```', 'c', '```')).toEqual([mixed])
+  // A heading followed by exactly one fenced block is a diagram section: no bullet rules apply to it, but its heading does.
+  expect(check('**Architecture**', '```mermaid', 'graph TD', '  A[a long line that is not a bullet: ever] --> B', '```')).toEqual([])
+  expect(check(`**${words(11)}**`, '```', 'a --> b', '```')).toEqual([`body heading "${words(11)}" has 11 words (max 10): shorten it`])
+  expect(check('```', 'a --> b', '```')).toEqual([expect.stringContaining('top-level code block')])
+  // A heading or an L1 head that mostly repeats the headline is turned away: 70% of its content words, at least 3 of them.
+  const repeats = (text: string) => `body "${text}" repeats the headline: say something the headline doesn't`
+  const reply = (...rows: string[]) => validateReply({ headline: 'The checkout retry fix is ready to release now.', body: rows.join('\n') })
+  expect(reply('**Checkout retry fix ready**', l1(words(9)))).toEqual([repeats('Checkout retry fix ready')])
+  expect(reply('**S**', l1('The checkout retry fix is ready to release now'))).toEqual([repeats('The checkout retry fix is ready to release now')])
+  expect(reply('**S**', l1('The checkout retry fix has a new timeout path in Safari'))).toEqual([])
+  expect(reply('**Retry fix**', l1(words(9)))).toEqual([])
+  expect(reply('**S**', l1(words(9)), l2('The checkout retry fix is ready to release now'))).toEqual([])
 })
 
-test('the level table: summary is full, the reason is exec, the evidence is full', () => {
-  expect(LEVELS.summary).toBe(3)
-  expect(LEVELS.reason).toBe(2)
-  expect(LEVELS.evidence).toBe(3)
-  expect(LEVELS.verdict).toBe(2)
-  expect(LEVELS.decision).toBe(1)
+test('the level table: the headline and the decision line are tldr, headings and heads and option heads are exec, tails and bodies are full', () => {
+  expect([LEVELS.headline, LEVELS.decision, LEVELS.link]).toEqual([1, 1, 1])
+  expect([LEVELS.bodySection, LEVELS.bodyHead, LEVELS.bodyDiagram, LEVELS.option, LEVELS.caveat, LEVELS.linksHeading]).toEqual([2, 2, 2, 2, 2, 2])
+  expect([LEVELS.bodyTail, LEVELS.bodyL2, LEVELS.bodyL3, LEVELS.optionBody, LEVELS.caveatDetails]).toEqual([3, 3, 3, 3, 3])
+  // LEGACY units keep the levels they had.
+  expect([LEVELS.summary, LEVELS.statusSection, LEVELS.statusBullet, LEVELS.statusSub, LEVELS.next]).toEqual([3, 2, 2, 3, 1])
+  expect(ICONS.glyph.body).toBe('≡')
+  expect(ICONS.emoji.body).toBe('📋')
 })

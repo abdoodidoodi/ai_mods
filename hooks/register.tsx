@@ -2,22 +2,31 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
+  CLOSING_MATCHER,
   CONTRACT,
   CONTRACT_ID,
   MAX_REJECTIONS,
   USAGE,
   addStats,
+  closingText,
+  DEPTH,
+  HEAD_UNITS,
+  RECOMMENDED_TAG,
+  joinMarkdown,
+  linkTarget,
+  oneLine,
+  viewBlocks,
   formatStats,
+  indicatorText,
   parseSetting,
   readStats,
   rejectionText,
   renderReply,
-  replyFooter,
   toolSpec,
   validateReply,
   viewOf,
 } from './reply'
-import type { Setting, Stats } from './reply'
+import type { Block, Line, Setting, Stats, Stance } from './reply'
 
 // Drawn state: what a respond row reads while drawing. A change redraws past replies.
 // The setting (off, or on drawing tldr, exec or full) lives here alone, in the host's session state,
@@ -35,6 +44,8 @@ async function setMode($: EngineInterface, want: Setting): Promise<string> {
   const now = await read($, mode)
   if (want === now) return `reply-tool is already set to ${now}.`
   await putMode($, want)
+  // The bottom-bar indicator follows the setting at once.
+  $.ui.status(indicatorText(want))
   if (now !== 'off' && want !== 'off') return `reply-tool now draws replies as ${want}.`
   await $.tool.register(toolSpec(want !== 'off'))
   return want === 'off'
@@ -53,12 +64,9 @@ function bump($: EngineInterface, delta: Partial<Stats>): Promise<unknown> {
 }
 
 // One turn of one loop (the main loop, or a subagent's), as far as respond is concerned.
-type Book = { rejections: number; calls: number; isDelivered: boolean; deliveredIssues: number; isClosed: boolean }
-const fresh = (): Book => ({ rejections: 0, calls: 0, isDelivered: false, deliveredIssues: 0, isClosed: false })
+type Book = { input: unknown; rejections: number; calls: number; isDelivered: boolean; deliveredIssues: number; isClosed: boolean }
+const fresh = (): Book => ({ input: undefined, rejections: 0, calls: 0, isDelivered: false, deliveredIssues: 0, isClosed: false })
 const loopOf = (agentId: string | undefined): string => agentId ?? 'main'
-
-// What the closing step says: nothing a person can see.
-const CLOSING = '\u200b'
 
 
 export const register: Register = on => {
@@ -84,7 +92,10 @@ export const register: Register = on => {
       name: 'reply_stats',
       description: 'reply-tool: show the counters: turns, structured replies, rejections',
     })
-    await $.tool.register(toolSpec((await read($, mode)) !== 'off'))
+    const current = await read($, mode)
+    await $.tool.register(toolSpec(current !== 'off'))
+    // A hot reload keeps the setting, so the indicator is laid again from it.
+    $.ui.status(indicatorText(current))
     return started
   })
 
@@ -150,6 +161,7 @@ export const register: Register = on => {
     }
     // Clean, or the turn's rejections are spent: accepted; the drawing and the counters note the issues.
     book.isDelivered = true
+    book.input = input
     book.isClosed = false
     book.deliveredIssues = issues.length
     return { result: 'delivered' }
@@ -157,17 +169,19 @@ export const register: Register = on => {
 
   // After `delivered` the turn is over, but the model's next request would only come back with
   // thinking and no text, and the loop answers that with a "no visible output" nudge that makes the
-  // model write the reply again. So that one step is answered here, with a zero-width space as its
-  // text (an answer the loop accepts as visible) and no request is sent; the row is drawn as nothing.
+  // model write the reply again. So that one step is answered here, with no request: its text is the
+  // reply as markdown behind an invisible marker, ordinary assistant text that Desktop and mobile draw
+  // (they have no ToolUse row for respond). The terminal hides it, its ToolUse row draws the reply.
   on('turn.step', async function* ($, e, next) {
     // Only the main loop is ever closed: a subagent's steps go to the model as they are.
     if (e.agentId !== undefined) return yield* next(e)
     const book = books.get(loopOf(e.agentId))
     if (book === undefined || !book.isDelivered || book.isClosed) return yield* next(e)
     book.isClosed = true
-    yield { kind: 'text', index: 0, text: CLOSING }
+    const closing = closingText(book.input, viewOf(await read($, mode)))
+    yield { kind: 'text', index: 0, text: closing }
     yield { kind: 'stop', stopReason: 'end_turn', usage: null }
-    return { turnId: e.turnId, index: e.index, answer: CLOSING, toolUses: [], stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: closing, toolUses: [], stopReason: 'end_turn', usage: null }
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -191,30 +205,96 @@ export const register: Register = on => {
   on('ui.render', { component: 'ToolUse', props: { tool: 'mcp__reply-tool__respond' } }, async ($, e, next) => {
     // ctrl+o and an aborted call: the engine's own row, so the raw call stays inspectable.
     if (e.props.isExpanded === true || e.props.isInterrupted) return next(e)
-    const { Box, Markdown, Text } = $.ui.resolve(e)
-    const issues = validateReply(e.props.input)
+    const { Box, Markdown, Text, Link } = $.ui.resolve(e)
 
-    if (e.props.isErrored) return <Text dimColor>{`respond rejected: ${issues.length} issue(s)`}</Text>
+    // A rejected call (the validator's deny, or any refusal) ends as an errored tool result in the transcript, so
+    // the flag survives a resume and a redraw. It and the running moment before the verdict draw nothing: only the
+    // accepted call is drawn. The model still reads the rejection text; this only hides the drawing.
+    if (e.props.isErrored || e.props.isRunning) return <Box display="none" />
 
     // With the mod off a reply already in the transcript draws in full; so does the full setting.
-    const setting = await read($, mode)
-    const markdown = renderReply(e.props.input, viewOf(setting))
-    if (markdown.trim() === '') return <Text dimColor>respond: the reply is empty</Text>
+    const view = viewOf(await read($, mode))
+    const markdown = renderReply(e.props.input, view)
+    if (markdown.trim() === '') return <Box display="none" />
+    // Desktop, VS Code and mobile draw the markdown: the links are `[label](url)`; markdown has no colors.
+    if (e.surface !== 'terminal') return <Markdown text={markdown} />
 
-    const [head, ...rest] = replyFooter(setting, issues)
+    // The terminal draws the same blocks: a blank line above the reply, one blank line between blocks, tight lines
+    // inside them. Markdown lines are drawn by Markdown; option lines are colored by stance, links show only their label.
+    const stanceColor: Record<Stance, string> = { recommended: 'green', option: 'blue', not_recommended: 'red' }
+    const drawLine = (line: Line, i: number) => {
+      if (line.kind === 'option') {
+        const { option } = line
+        const color = stanceColor[option.stance]
+        return (
+          <Text key={`k${i}`}>
+            {'- '}
+            {option.stance === 'recommended' ? <Text weight="bold" color={color}>{`${RECOMMENDED_TAG} `}</Text> : null}
+            <Text weight="bold" color={color}>{oneLine(option.head)}</Text>
+            {line.tail === undefined ? null : <Text>{line.tail}</Text>}
+          </Text>
+        )
+      }
+      const link = line.kind === 'link' ? line.link : undefined
+      const href = link === undefined ? undefined : linkTarget(link)
+      const label = link === undefined ? '' : link.label.trim() === '' ? link.path.trim() : link.label.trim()
+      // LinkProps has no color, so the label is a blue Text, inside the Link when there is a target.
+      const blue = <Text color="blue">{label}</Text>
+      return (
+        <Text key={`k${i}`}>
+          {'- '}
+          {href === undefined ? blue : <Link href={href}>{blue}</Link>}
+        </Text>
+      )
+    }
+    // Consecutive markdown lines are one Markdown element; an option or link line breaks the run (an option's body
+    // joins its head as plain text once its view shows it). `from` is where
+    // `lines` start in their block, so every key stays unique.
+    const drawLines = (lines: Line[], i: number, from: number) => {
+      const nodes: ReturnType<typeof drawLine>[] = []
+      let run: Line[] = []
+      const flush = () => {
+        if (run.length > 0) nodes.push(<Markdown key={`m${i}-${from + nodes.length}`} text={joinMarkdown(run)} />)
+        run = []
+      }
+      lines.forEach((line, j) => {
+        if (line.kind === 'md') run.push(line)
+        else {
+          flush()
+          nodes.push(drawLine(line, i * 1000 + from + j))
+        }
+      })
+      flush()
+      return nodes
+    }
+    // A head with lines under it (a body section, the decision, a caveat with details, the links) is drawn alone and
+    // its lines go in a box one step in: markdown cannot nest a list under a bold heading line, so the indent is the
+    // box's. Nested bullets, tables and code keep nesting through markdown inside it. Any other block is drawn as it is.
+    const drawBlock = (block: Block, i: number) => {
+      const head = block[0]
+      const isHeaded = head !== undefined && block.length > 1 && HEAD_UNITS.includes(head.unit)
+      return (
+        <Box key={`k${i}`} flexDirection="column">
+          {isHeaded
+            ? [
+                ...drawLines(block.slice(0, 1), i, 0),
+                <Box key={`i${i}`} flexDirection="column" paddingLeft={2}>
+                  {drawLines(block.slice(1), i, 1)}
+                </Box>,
+              ]
+            : drawLines(block, i, 0)}
+        </Box>
+      )
+    }
     return (
-      <Box flexDirection="column">
-        <Markdown text={markdown} />
-        <Text dimColor>{head ?? ''}</Text>
-        {rest.map(line => (
-          <Text dimColor>{line}</Text>
-        ))}
+      <Box flexDirection="column" marginTop={1} gap={1}>
+        {viewBlocks(e.props.input, view).map(drawBlock)}
       </Box>
     )
   })
 
-  // The closing row (a zero-width space) is drawn as nothing.
-  on('ui.render', { component: 'AssistantMessage', props: { text: /^[\u200b\s]*\u200b[\u200b\s]*$/ } }, ($, e) => {
+  // The closing row (the marked reply text, or a bare zero-width space) is drawn as nothing in the terminal.
+  on('ui.render', { component: 'AssistantMessage', props: { text: CLOSING_MATCHER } }, ($, e) => {
     const { Box } = $.ui.resolve(e)
     return <Box display="none" />
   })

@@ -10,6 +10,7 @@ import {
   addStats,
   closingText,
   DEPTH,
+  HEAD_UNITS,
   RECOMMENDED_TAG,
   joinMarkdown,
   linkTarget,
@@ -229,40 +230,59 @@ export const register: Register = on => {
           <Text key={`k${i}`}>
             {'- '}
             {option.stance === 'recommended' ? <Text weight="bold" color={color}>{`${RECOMMENDED_TAG} `}</Text> : null}
-            <Text weight="bold" color={color}>{oneLine(option.name)}</Text>
-            <Text>{`: ${oneLine(option.consequence)}`}</Text>
+            <Text weight="bold" color={color}>{oneLine(option.head)}</Text>
+            {line.tail === undefined ? null : <Text>{line.tail}</Text>}
           </Text>
         )
       }
       const link = line.kind === 'link' ? line.link : undefined
       const href = link === undefined ? undefined : linkTarget(link)
       const label = link === undefined ? '' : link.label.trim() === '' ? link.path.trim() : link.label.trim()
+      // LinkProps has no color, so the label is a blue Text, inside the Link when there is a target.
+      const blue = <Text color="blue">{label}</Text>
       return (
         <Text key={`k${i}`}>
           {'- '}
-          {href === undefined ? label : <Link href={href}>{label}</Link>}
+          {href === undefined ? blue : <Link href={href}>{blue}</Link>}
         </Text>
       )
     }
-    // Consecutive markdown lines are one Markdown element; an option or link line breaks the run.
-    const drawBlock = (block: Block, i: number) => {
+    // Consecutive markdown lines are one Markdown element; an option or link line breaks the run (an option's body
+    // joins its head as plain text once its view shows it). `from` is where
+    // `lines` start in their block, so every key stays unique.
+    const drawLines = (lines: Line[], i: number, from: number) => {
       const nodes: ReturnType<typeof drawLine>[] = []
       let run: Line[] = []
       const flush = () => {
-        if (run.length > 0) nodes.push(<Markdown key={`m${i}-${nodes.length}`} text={joinMarkdown(run)} />)
+        if (run.length > 0) nodes.push(<Markdown key={`m${i}-${from + nodes.length}`} text={joinMarkdown(run)} />)
         run = []
       }
-      block.forEach((line, j) => {
+      lines.forEach((line, j) => {
         if (line.kind === 'md') run.push(line)
         else {
           flush()
-          nodes.push(drawLine(line, i * 1000 + j))
+          nodes.push(drawLine(line, i * 1000 + from + j))
         }
       })
       flush()
+      return nodes
+    }
+    // A head with lines under it (a body section, the decision, a caveat with details, the links) is drawn alone and
+    // its lines go in a box one step in: markdown cannot nest a list under a bold heading line, so the indent is the
+    // box's. Nested bullets, tables and code keep nesting through markdown inside it. Any other block is drawn as it is.
+    const drawBlock = (block: Block, i: number) => {
+      const head = block[0]
+      const isHeaded = head !== undefined && block.length > 1 && HEAD_UNITS.includes(head.unit)
       return (
         <Box key={`k${i}`} flexDirection="column">
-          {nodes}
+          {isHeaded
+            ? [
+                ...drawLines(block.slice(0, 1), i, 0),
+                <Box key={`i${i}`} flexDirection="column" paddingLeft={2}>
+                  {drawLines(block.slice(1), i, 1)}
+                </Box>,
+              ]
+            : drawLines(block, i, 0)}
         </Box>
       )
     }
