@@ -14,6 +14,8 @@ import {
   RECOMMENDED_TAG,
   joinMarkdown,
   linkTarget,
+  literalOrdinal,
+  markerWidth,
   oneLine,
   viewBlocks,
   formatStats,
@@ -226,11 +228,13 @@ export const register: Register = on => {
       if (line.kind === 'option') {
         const { option } = line
         const color = stanceColor[option.stance]
+        // The head keeps its stance color; it is bold only when the body is drawn after it.
+        const weight = line.tail === undefined ? undefined : 'bold'
         return (
           <Text key={`k${i}`}>
             {'- '}
             {option.stance === 'recommended' ? <Text weight="bold" color={color}>{`${RECOMMENDED_TAG} `}</Text> : null}
-            <Text weight="bold" color={color}>{oneLine(option.head)}</Text>
+            <Text weight={weight} color={color}>{oneLine(option.head)}</Text>
             {line.tail === undefined ? null : <Text>{line.tail}</Text>}
           </Text>
         )
@@ -247,8 +251,9 @@ export const register: Register = on => {
         </Text>
       )
     }
-    // Consecutive markdown lines are one Markdown element; an option or link line breaks the run (an option's body
-    // joins its head as plain text once its view shows it). `from` is where
+    // Consecutive markdown lines (a body bullet is one) are one Markdown element; an option or link line breaks the run
+    // (an option's body joins its head as plain text once its view shows it). A numbered heading draws its number as
+    // literal text (`2\. `), so the number never rests on the renderer's list numbering. `from` is where
     // `lines` start in their block, so every key stays unique.
     const drawLines = (lines: Line[], i: number, from: number) => {
       const nodes: ReturnType<typeof drawLine>[] = []
@@ -258,7 +263,7 @@ export const register: Register = on => {
         run = []
       }
       lines.forEach((line, j) => {
-        if (line.kind === 'md') run.push(line)
+        if (line.kind === 'md' || line.kind === 'bullet') run.push(literalOrdinal(line))
         else {
           flush()
           nodes.push(drawLine(line, i * 1000 + from + j))
@@ -269,7 +274,9 @@ export const register: Register = on => {
     }
     // A head with lines under it (a body section, the decision, a caveat with details, the links) is drawn alone and
     // its lines go in a box one step in: markdown cannot nest a list under a bold heading line, so the indent is the
-    // box's. Nested bullets, tables and code keep nesting through markdown inside it. Any other block is drawn as it is.
+    // box's, as wide as the head's marker (a numbered section's `1. ` is 3, `10. ` is 4, any other head 2) so the lines
+    // sit under the heading text. Nested bullets, tables and code keep nesting through markdown inside it. Any other
+    // block is drawn as it is.
     const drawBlock = (block: Block, i: number) => {
       const head = block[0]
       const isHeaded = head !== undefined && block.length > 1 && HEAD_UNITS.includes(head.unit)
@@ -278,7 +285,7 @@ export const register: Register = on => {
           {isHeaded
             ? [
                 ...drawLines(block.slice(0, 1), i, 0),
-                <Box key={`i${i}`} flexDirection="column" paddingLeft={2}>
+                <Box key={`i${i}`} flexDirection="column" paddingLeft={markerWidth(head)}>
                   {drawLines(block.slice(1), i, 1)}
                 </Box>,
               ]

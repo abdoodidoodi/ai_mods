@@ -9,8 +9,8 @@ Long replies bury the answer. With reply-tool the answer comes first, and you de
 Three views, for three readers:
 
 - `tldr` is for someone who wants fully autonomous execution without knowing how or why: only the shortest status. The bold headline (at most 3 sentences and 60 words), the decision (the choice in bold, then Claude's pick: the head of the recommended option), and the links. No body, no options.
-- `exec` is for someone who also wants a say in the decision, with only the few words that build it in their head. tldr plus the body's section headings and L1 heads (the head only, no tail), every option's head (the recommended one first, in its stance color), the caveat texts, and a `Links` heading.
-- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus the L1 tails (on the same bullet as their head), every L2 and L3 bullet (and the tables, code and prose under them), the option bodies, and the caveat details.
+- `exec` is for someone who also wants a say in the decision, with only the few words that build it in their head. tldr plus the body's numbered section headings and L1 heads (the head only, plain, no tail), every option's head (plain, the recommended one first, in its stance color), the caveat texts, and a `Links` heading. Nothing in the body or the options is bold except the main headlines: the reply headline, the section headings, the decision choice and the `Links` heading.
+- `full` is for working on one specific problem fully by hand, with every control and every detail. exec plus the L1 tails (on the same bullet as their head, which turns bold), every L2 and L3 bullet (and the tables, code and prose under them), the option bodies, and the caveat details.
 
 Claude always sends the full reply. The view only changes how it is drawn, so switching views redraws the replies already in the transcript, with nothing lost and nothing to ask again.
 
@@ -72,14 +72,14 @@ Every drawn line is one unit of a type, and one exported table, `LEVELS` in `hoo
 | Unit | What it is | Level |
 | --- | --- | --- |
 | `headline` | the bold summary of the whole reply | 1 (tldr) |
-| `bodySection` | a body section heading | 2 (exec) |
-| `bodyHead` | an L1 bullet: its head, in bold | 2 (exec) |
+| `bodySection` | a body section heading, numbered in the order of the reply: `1. **Heading**` | 2 (exec) |
+| `bodyHead` | an L1 bullet: its head, plain (bold only once its tail is drawn after it) | 2 (exec) |
 | `bodyTail` | an L1 bullet's tail, on the same bullet as its head | 3 (full) |
-| `bodyL2` | an L2 bullet (`head: tail`), or a table or code block nested at L2 | 3 (full) |
+| `bodyL2` | an L2 bullet (`head: tail`, the head bold when it has a tail), or a table or code block nested at L2 | 3 (full) |
 | `bodyL3` | L3: freeform markdown under an L2 bullet | 3 (full) |
 | `bodyDiagram` | a diagram section's fenced block | 2 (exec) |
 | `decision` | the `**choice** <recommended option head>` line | 1 (tldr) |
-| `option` | `- [Recommended] **Head**` | 2 (exec) |
+| `option` | `- [Recommended] Head`: plain, bold only once its body is drawn after it | 2 (exec) |
 | `optionBody` | the option's `: body`, on the same line as its head | 3 (full) |
 | `caveat` | `⚠ text` | 2 (exec) |
 | `caveatDetails` | a caveat's details, nested under it | 3 (full) |
@@ -88,17 +88,17 @@ Every drawn line is one unit of a type, and one exported table, `LEVELS` in `hoo
 
 Units for replies from before 0.1.14 (`summary`, `verdict`, `reason`, `evidence`, `section`, `bullet`, `subbullet`, `statusSection`, `statusBullet`, `statusSub`, `next`) are in the same table, marked LEGACY.
 
-A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (body section, then L1 head, then L2, then L3; decision, then option; caveat, then its details). An L1 head and an option grow on the same line when the view reaches their tail or body, so a head is never a separate line from its tail.
+A block shows when any of its units shows. A child never shows before its parent: when a parent's level is higher than its child's, the child takes the parent's (body section, then L1 head, then L2, then L3; decision, then option; caveat, then its details). An L1 head and an option grow on the same line when the view reaches their tail or body (and turn bold as they do), so a head is never a separate line from its tail.
 
-Section icons. The first line of each block opens with an icon, so the eye can find a section: `●` the headline, `≡` each body section, `◇` the decision, `⚠` each caveat, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 📋 🔀 ⚠️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A `#` heading in the body is drawn as a bold line behind its icon, and a body that starts with bullets (an unnamed section) takes the icon after the first list marker. The icons are part of the markdown, so the terminal and Desktop draw the same.
+Section icons and numbers. The first line of each block opens with an icon, so the eye can find a section: `●` the headline, `◇` the decision, `⚠` each caveat, `↗` the Links heading (exec and full; tldr has no heading). They are in the one exported `ICONS` table, which also holds an emoji set (🎯 🔀 ⚠️ 🔗); `ICON_SET` picks which one is used, `glyph` by default. A body section has no icon: its heading opens with its number, `1.`, `2.`, `3.`, counted in the order of the reply, a diagram section included. A `#` heading in the body is drawn as a bold numbered line, and a body that starts with bullets (an unnamed section, before the first heading) has no number and no icon. A reply from before 0.1.14 keeps the icons it had: a `details` outline opens with `≡` (📋) and a `status` outline with `▸` (📍). The icons and numbers are part of the markdown, so the terminal and Desktop draw the same. One difference: Desktop and the closing text draw a heading as a real ordered-list item (`2. **Heading**`, which CommonMark numbers from its start), while the terminal, which draws each heading as its own element, writes the number as literal text (`2\. **Heading**`) so it never depends on its renderer's list numbering. Its box is still as wide as the marker.
 
 Spacing and emphasis:
 
 - **One blank line between blocks,** none inside one: each body section, the decision, each caveat and the links are separate blocks, and lists are tight.
-- **Heads are bold.** An L1 or L2 bullet is drawn as `**head**: tail`, with the head in bold whether or not Claude bolded it. An L3 bullet is drawn as it was written.
-- **Indented under a head.** Markdown cannot nest a list under a paragraph, so a head with lines under it (a body section, the decision, a caveat with details, the Links heading) is drawn as a list item and the lines under it nest two spaces in, in the markdown that Desktop, VS Code and mobile show and in the closing text. The terminal indents them with a box instead. L2 and L3 nest deeper by their own indentation, and a table or a code fence under a bullet keeps that indentation, so it stays inside the list item.
-- **Options.** Under the decision, `- [Recommended] **Head**` for the recommended option, always first, then the others in their given order as `- **Head**`. In `full` each takes its body: `- **Head**: body`.
-- **Option colors (terminal only).** `[Recommended]` and the head of the recommended option are green, `option` heads blue, `not_recommended` heads red. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. The decision has exactly one `recommended` option.
+- **A head is bold only when its tail is drawn after it.** In `tldr` and `exec` the tails are hidden, so an L1 head is plain; in `full` an L1 or L2 bullet with a tail is `**head**: tail`, and a bullet with no tail stays plain. Any `**` Claude writes around or inside a head is dropped first, so it cannot force bold. An L3 bullet is drawn as it was written. The bold lines are the reply headline, the section headings, the decision choice and the `Links` heading, in every view.
+- **Indented under a head.** Markdown cannot nest a list under a paragraph, so a head with lines under it (a body section, the decision, a caveat with details, the Links heading) is drawn as a list item (a body section is a numbered one, `1. **Heading**`) and the lines under it nest in by the width of its marker, so they stay under it: two spaces for `- `, three for `1. `, four for `10. `. That is the markdown that Desktop, VS Code and mobile show and the closing text. The terminal indents them with a box of the same width instead, so they line up under the heading text. L2 and L3 nest deeper by their own indentation, and a table or a code fence under a bullet keeps that indentation, so it stays inside the list item.
+- **Options.** Under the decision, `- [Recommended] Head` for the recommended option, always first, then the others in their given order as `- Head`. In `full` each takes its body and its head turns bold: `- **Head**: body`; an option with no body stays plain.
+- **Option colors (terminal only).** `[Recommended]` and the head of the recommended option are green, `option` heads blue, `not_recommended` heads red. The tag is always bold; a head keeps its color in every view and is bold only in `full`, where its body follows it. Desktop and mobile show markdown, which has no colors, so they show `[Recommended]` only. The decision has exactly one `recommended` option.
 - **Links show just their label,** as a clickable link in blue: an OSC 8 hyperlink in the terminal (no path, no `file:///` text), `[label](url)` in markdown. They are always the last block.
 - **A blank line above every reply** in the terminal, between your prompt and the answer.
 - **No decision label, bar or blockquote:** the decision is a bold choice and the head of the recommended option, followed by its options.
@@ -107,7 +107,7 @@ Spacing and emphasis:
 
 The body is one markdown outline: the only place for explanation, progress and evidence.
 
-- **Sections.** A section is a heading (a `#` heading or a line that is only bold, at most 10 words) followed by bullets. Bullets before the first heading are an unnamed section. The number of sections and of bullets in one is not limited.
+- **Sections.** A section is a heading (a `#` heading or a line that is only bold, at most 10 words) followed by bullets. Bullets before the first heading are an unnamed section. The number of sections and of bullets in one is not limited. The drawing numbers the sections 1, 2, 3 in the order of the reply (a diagram section counts), so a heading carries no number of its own: a number Claude writes anyway (`1. `, `2) `, `Step 3: `, `Part 2. `, `Section 4) `) is dropped before the heading is counted and drawn.
 - **Depth.** Bullets nest at most 3 levels under a heading: L1, L2 (indented 2 spaces) and L3 (indented 4). A 4th bullet level is turned away.
 - **Bullets.** Every L1 and L2 bullet is `head: tail`: the head is the text before the first colon that is followed by a space or the line end (so `10:00` and `https://...` do not split), and it must be a sentence of 8 to 15 words (words are whitespace-separated, `**` markers ignored). With no such colon the whole bullet is the head and the tail is empty. An L1 tail is at most 1 sentence, an L2 tail at most 2.
 - **L3.** Anything indented under an L2 bullet is L3: bullets, prose, block quotes, tables, fenced code. None of it is checked, so ids, paths, URLs and code go there. It is drawn intact in `full`, nested under its L2 bullet.
@@ -178,21 +178,21 @@ Drawn at `tldr`:
 - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `exec`: `tldr` plus the section headings and L1 heads, every option head, the caveat text and the Links heading:
+Drawn at `exec`: `tldr` plus the numbered section headings and L1 heads, every option head, the caveat text and the Links heading. The tails and bodies are hidden, so no head is bold:
 
 ```
 ● **Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.**
 
-- ≡ **Why it broke**
-  - **Safari dropped the session whenever the payment call timed out**
+1. **Why it broke**
+   - Safari dropped the session whenever the payment call timed out
 
-- ≡ **Rollout plan**
-  - **Canary goes to five percent of traffic on Thursday morning**
+2. **Rollout plan**
+   - Canary goes to five percent of traffic on Thursday morning
 
 - ◇ **How should we release the fix?** Canary on Thursday, then everyone on Friday after a two hour watch
-  - [Recommended] **Canary on Thursday, then everyone on Friday after a two hour watch**
-  - **Wait a week and run the full regression pass first**
-  - **Ship today to everyone and skip the QA sign-off entirely**
+  - [Recommended] Canary on Thursday, then everyone on Friday after a two hour watch
+  - Wait a week and run the full regression pass first
+  - Ship today to everyone and skip the QA sign-off entirely
 
 ⚠ Safari 16 was not tested.
 
@@ -200,23 +200,23 @@ Drawn at `exec`: `tldr` plus the section headings and L1 heads, every option hea
   - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-Drawn at `full`: `exec` plus the L1 tails, L2 and L3, the option bodies and the caveat details:
+Drawn at `full`: `exec` plus the L1 tails, L2 and L3, the option bodies and the caveat details. A head with a tail or body after it is bold:
 
 ```
 ● **Safari checkout is fixed and ready to release. The retry now covers the timeout path, which cut failures from 4% to 0.1%.**
 
-- ≡ **Why it broke**
-  - **Safari dropped the session whenever the payment call timed out**: no other browser was affected.
-    - **The retry wrapper now covers that path with two attempts and a short backoff**: the second attempt reuses the original session.
-      - Fix: retry wrapper in `checkout/pay.ts`, MR !441. Failure rate before 4%, after 0.1%. Measured on the staging mirror. Sampled hourly for 24 hours.
+1. **Why it broke**
+   - **Safari dropped the session whenever the payment call timed out**: no other browser was affected.
+     - **The retry wrapper now covers that path with two attempts and a short backoff**: the second attempt reuses the original session.
+       - Fix: retry wrapper in `checkout/pay.ts`, MR !441. Failure rate before 4%, after 0.1%. Measured on the staging mirror. Sampled hourly for 24 hours.
 
-- ≡ **Rollout plan**
-  - **Canary goes to five percent of traffic on Thursday morning**: it is watched for two hours.
-    - **Full rollout starts on Friday at 10:00 if the canary stays clean**: QA signs off before that.
-      | Stage | Traffic | When |
-      | --- | --- | --- |
-      | Canary | 5% | Thursday |
-      | Full | 100% | Friday 10:00 |
+2. **Rollout plan**
+   - **Canary goes to five percent of traffic on Thursday morning**: it is watched for two hours.
+     - **Full rollout starts on Friday at 10:00 if the canary stays clean**: QA signs off before that.
+       | Stage | Traffic | When |
+       | --- | --- | --- |
+       | Canary | 5% | Thursday |
+       | Full | 100% | Friday 10:00 |
 
 - ◇ **How should we release the fix?** Canary on Thursday, then everyone on Friday after a two hour watch
   - [Recommended] **Canary on Thursday, then everyone on Friday after a two hour watch**: Customers get the fix 5 days sooner, after a canary that is watched first.
@@ -230,17 +230,17 @@ Drawn at `full`: `exec` plus the L1 tails, L2 and L3, the option bodies and the 
   - [Test report](file:///home/me/reports/checkout.html)
 ```
 
-The text above is the markdown source (what Desktop and mobile show): a head with lines under it is a list item and those lines nest two spaces in. The terminal draws the same lines itself, indenting them with a box, with the options colored by stance and a label-only hyperlink. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
+The text above is the markdown source (what Desktop and mobile show): a head with lines under it is a list item and those lines nest under it by the width of its marker (two spaces for `- `, three for a numbered section's `1. `). The terminal draws the same lines itself, indenting them with a box of that width, with the options colored by stance and a label-only hyperlink. The closing text that Desktop and mobile show is this same markdown (valid GitHub markdown).
 
-A diagram section, when the user asks for one, is a heading and one fenced block, drawn at `exec` and `full`:
+A diagram section, when the user asks for one, is a heading and one fenced block, drawn at `exec` and `full` and numbered like any other section:
 
 ````
 ● **The retry sits between the cart and the payment call.**
 
-- ≡ **Architecture**
-  ```
-  cart --> retry wrapper --> payment API
-  ```
+1. **Architecture**
+   ```
+   cart --> retry wrapper --> payment API
+   ```
 ````
 
 ## Screenshots
@@ -264,7 +264,7 @@ The `respond` tool takes one JSON object, with no other fields. Only `headline` 
 The tool checks, and rejects with the exact issues:
 
 - a missing or empty `headline`; a `headline` of more than 60 words or more than 3 sentences
-- `summary`, `status`, `details`, `next`, `questions` or `decisions` in a new call (each is no longer a field; the message says where the content goes now: fold the summary into the headline, put status and details in the body, drop the next step or make it a decision option, answer questions in the headline and their own body sections, send one decision whose 2 to 4 options are whole plans)
+- `summary`, `status`, `details`, `next`, `questions` or `decisions` in a new call (each is no longer a field; the message says where the content goes now: fold the summary into the headline, put status and details in the body, drop the next step or make it a decision option, put the answer in the headline and the body, send one decision whose 2 to 4 options are whole plans)
 - in the `body`:
   - a heading of more than 10 words
   - an L1 or L2 bullet whose head has fewer than 8 or more than 15 words, an L1 tail of more than 1 sentence, an L2 tail of more than 2

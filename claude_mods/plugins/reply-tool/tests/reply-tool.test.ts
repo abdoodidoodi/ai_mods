@@ -36,45 +36,65 @@ const LINK = '- [Test report](file:///home/me/reports/checkout.html)'
 const CAVEAT = '⚠ Safari 16 was not tested.'
 const CAVEAT_DETAILS = '- Only Safari 17 and 18 were in the lab, so the timeout path is untested on the older engine.'
 // As markdown (Desktop, VS Code, mobile, the closing text) a head with lines under it is a list item and those lines
-// nest two spaces in; the terminal indents them with a box instead, so its constants stay flat.
-const nest = (head: string, ...rest: string[]): string => [`- ${head}`, ...rest.map(row => `  ${row}`)].join('\n')
+// nest under it by the width of its marker (`- ` is 2, a numbered section's `1. ` is 3, `10. ` is 4); the terminal
+// indents them with a box instead, so its constants stay flat.
+const nest = (head: string, ...rest: string[]): string => {
+  const marker = /^\d+\. /.exec(head)?.[0] ?? '- '
+  const pad = ' '.repeat(marker.length)
+  return [marker === '- ' ? `- ${head}` : head, ...rest.map(row => `${pad}${row}`)].join('\n')
+}
 
-const SECTION_1 = '≡ **Why it broke**'
-const L1_1 = '- **Safari dropped the session whenever the payment call timed out**'
+// A body head is plain until its tail is drawn after it (exec); with a tail (full) it is bold.
+const SECTION_1 = '1. **Why it broke**'
+const L1_1_HEAD = 'Safari dropped the session whenever the payment call timed out'
+const L1_1 = `- ${L1_1_HEAD}`
 const L1_1_TAIL = ': no other browser was affected.'
+const L1_1_FULL = `- **${L1_1_HEAD}**${L1_1_TAIL}`
 const L2_1 = '  - **The retry wrapper now covers that path with two attempts and a short backoff**: the second attempt reuses the original session.'
 const L3_1 = '    - Fix: retry wrapper in `checkout/pay.ts`, MR !441. Failure rate before 4%, after 0.1%. Measured on the staging mirror. Sampled hourly for 24 hours.'
-const SECTION_2 = '≡ **Rollout plan**'
-const L1_2 = '- **Canary goes to five percent of traffic on Thursday morning**'
+const SECTION_2 = '2. **Rollout plan**'
+// The terminal draws a section's number as literal text (an escaped period), never as a list item, so it does not rest on
+// its renderer's list numbering; its box is still as wide as `1. `.
+const TERM_SECTION_1 = '1\\. **Why it broke**'
+const TERM_SECTION_2 = '2\\. **Rollout plan**'
+const L1_2_HEAD = 'Canary goes to five percent of traffic on Thursday morning'
+const L1_2 = `- ${L1_2_HEAD}`
 const L1_2_TAIL = ': it is watched for two hours.'
+const L1_2_FULL = `- **${L1_2_HEAD}**${L1_2_TAIL}`
 const L2_2 = '  - **Full rollout starts on Friday at 10:00 if the canary stays clean**: QA signs off before that.'
 const TABLE = ['    | Stage | Traffic | When |', '    | --- | --- | --- |', '    | Canary | 5% | Thursday |', '    | Full | 100% | Friday 10:00 |']
 
+// An option head is plain in exec (its body is hidden) and bold in full, where its body follows it.
 const OPTION_HEADS = [
-  `- [Recommended] **${PICK}**`,
-  '- **Wait a week and run the full regression pass first**',
-  '- **Ship today to everyone and skip the QA sign-off entirely**',
+  `- [Recommended] ${PICK}`,
+  '- Wait a week and run the full regression pass first',
+  '- Ship today to everyone and skip the QA sign-off entirely',
 ]
 const OPTION_BODIES = [
   ': Customers get the fix 5 days sooner, after a canary that is watched first.',
   ': Adds one more regression pass. Customers wait the extra week.',
   ': Fastest, but nobody checks the timeout path for regressions.',
 ]
+const OPTION_FULL = [
+  `- [Recommended] **${PICK}**${OPTION_BODIES[0]}`,
+  `- **Wait a week and run the full regression pass first**${OPTION_BODIES[1]}`,
+  `- **Ship today to everyone and skip the QA sign-off entirely**${OPTION_BODIES[2]}`,
+]
 const DECISION = nest(D1, ...OPTION_HEADS)
-const S1_FULL = nest(SECTION_1, L1_1 + L1_1_TAIL, L2_1, L3_1)
+const S1_FULL = nest(SECTION_1, L1_1_FULL, L2_1, L3_1)
 
 // tldr: the headline, the decision pick, the links; no Links heading.
 const TLDR = [HEAD, D1, LINK].join('\n\n')
 
-// exec: tldr plus the section headings and L1 heads (no tails), every option head, the caveat text and the Links heading.
+// exec: tldr plus the numbered section headings and L1 heads (plain, no tails), every option head (plain), the caveat text and the Links heading.
 const EXEC = [HEAD, nest(SECTION_1, L1_1), nest(SECTION_2, L1_2), DECISION, CAVEAT, nest('↗ **Links**', LINK)].join('\n\n')
 
-// full: exec plus the L1 tails, L2 and L3 (a table here), the option bodies and the caveat details.
+// full: exec plus the L1 tails, L2 and L3 (a table here), the option bodies and the caveat details; a head with a tail after it is bold.
 const FULL = [
   HEAD,
   S1_FULL,
-  nest(SECTION_2, L1_2 + L1_2_TAIL, L2_2, ...TABLE),
-  nest(D1, ...OPTION_HEADS.map((head, i) => head + (OPTION_BODIES[i] ?? ''))),
+  nest(SECTION_2, L1_2_FULL, L2_2, ...TABLE),
+  nest(D1, ...OPTION_FULL),
   nest(CAVEAT, CAVEAT_DETAILS),
   nest('↗ **Links**', LINK),
 ].join('\n\n')
@@ -116,8 +136,8 @@ const lines = (text: string): string[] =>
     .filter(line => line.trim() !== '')
     .map(line => line.trimEnd())
 
-// A line without its indent or list marker: a head alone in a smaller view is a paragraph, with lines under it in a bigger view a list item.
-const bare = (line: string): string => line.trim().replace(/^- /, '')
+// A line without its indent, list marker or bold: a head alone in a smaller view is a paragraph, with lines under it in a bigger view a list item, and plain until its tail follows it in bold.
+const bare = (line: string): string => line.trim().replace(/^- /, '').replace(/\*\*/g, '')
 
 // `n` distinct words, so a head or a tail of a given length is easy to write.
 const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
@@ -157,18 +177,23 @@ test('the views are one outline: every line of tldr is in exec, and of exec in f
   // tldr is clipped hard: the headline, the decision pick, the links. No body, options or caveats.
   expect(tldr).toEqual([HEAD, D1, LINK])
   expect(viewBlocks(WORKED_EXAMPLE, 'tldr')).toHaveLength(3)
-  // exec: the section headings and L1 heads, every option head and the caveat text; no tails, L2, L3, option bodies or details.
-  expect(exec).toContain(`  ${L1_1}`)
-  expect(exec).toContain(`  ${L1_2}`)
+  // exec: the numbered section headings and L1 heads, every option head and the caveat text; no tails, L2, L3, option bodies or details.
+  expect(exec).toContain(`   ${L1_1}`)
+  expect(exec).toContain(`   ${L1_2}`)
   expect(exec).toContain(`  ${OPTION_HEADS[0]}`)
   expect(exec).toContain(CAVEAT)
   const execText = exec.join('\n')
   for (const hidden of [L1_1_TAIL, 'retry wrapper', 'Canary | 5%', OPTION_BODIES[0] ?? '?', 'Only Safari 17']) expect(execText).not.toContain(hidden)
-  // full adds each of them.
+  // exec: no tail or body is drawn, so nothing in the body or the options is bold: the only bold is the headline, the
+  // section headings, the decision choice and the Links heading.
+  expect(execText.match(/\*\*[^*]+\*\*/g)).toEqual([HEAD.slice(2), '**Why it broke**', '**Rollout plan**', '**How should we release the fix?**', '**Links**'])
+  // full adds each of them; a head is bold now that its tail or body follows it.
   const fullText = full.join('\n')
-  for (const shown of [L1_1 + L1_1_TAIL, L2_1, L3_1, ...TABLE, (OPTION_HEADS[0] ?? '?') + OPTION_BODIES[0], CAVEAT_DETAILS]) {
+  for (const shown of [L1_1_FULL, L2_1, L3_1, ...TABLE, OPTION_FULL[0] ?? '?', CAVEAT_DETAILS]) {
     expect(fullText).toContain(shown.trimEnd())
   }
+  const heads = [L1_1_HEAD, L1_2_HEAD, PICK, 'Wait a week and run the full regression pass first', 'Ship today to everyone and skip the QA sign-off entirely']
+  for (const head of heads) expect(fullText).toContain(`**${head}**`)
 })
 
 test('the prefix invariant holds for every input, and after any one level is flipped', () => {
@@ -230,7 +255,7 @@ test('the LEVELS table drives the output: flipping one entry changes what a view
     LEVELS.caveat = saved.caveat
     // bodyTail 3 -> 2: the L1 tails join exec, and nothing below them.
     LEVELS.bodyTail = 2
-    expect(renderReply(WORKED_EXAMPLE, 'exec')).toContain(nest(SECTION_1, L1_1 + L1_1_TAIL))
+    expect(renderReply(WORKED_EXAMPLE, 'exec')).toContain(nest(SECTION_1, L1_1_FULL))
     expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('retry wrapper')
     LEVELS.bodyTail = saved.bodyTail
     // optionBody 3 -> 2: the option bodies join exec.
@@ -256,13 +281,13 @@ test('a child never shows before its parent: it takes the parent level when that
     // decision 3: its options (2) follow it.
     LEVELS.decision = 3
     expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('Wait a week')
-    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain(OPTION_HEADS[0] ?? '?')
+    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain(OPTION_FULL[0] ?? '?')
     LEVELS.decision = saved.decision
     // A section heading of 3 with L1 heads of 1: the heads wait for their heading.
     LEVELS.bodySection = 3
     LEVELS.bodyHead = 1
     expect(renderReply(WORKED_EXAMPLE, 'exec')).not.toContain('Safari dropped the session')
-    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain(L1_1 + L1_1_TAIL)
+    expect(renderReply(WORKED_EXAMPLE, 'full')).toContain(L1_1_FULL)
     LEVELS.bodySection = saved.bodySection
     LEVELS.bodyHead = saved.bodyHead
     // A caveat of 3 with details of 2: the details wait for the caveat.
@@ -275,10 +300,11 @@ test('a child never shows before its parent: it takes the parent level when that
   }
 })
 
-test('every block opens with its section icon, in both sets; the emoji set swaps cleanly', () => {
+test('every block opens with its section icon, a body section with its number, in both sets; the emoji set swaps cleanly', () => {
+  // A body section has no icon: it opens with its number, 1. and 2. here, the same in both sets.
   const expected = (set: 'glyph' | 'emoji') => {
     const i = ICONS[set]
-    return [i.answer, i.body, i.body, i.decision, i.caveat, i.links]
+    return [i.answer, '1. ', '2. ', i.decision, i.caveat, i.links]
   }
   for (const set of ['glyph', 'emoji'] as const) {
     const blocks = viewBlocks(WORKED_EXAMPLE, 'full', set)
@@ -298,13 +324,15 @@ test('every block opens with its section icon, in both sets; the emoji set swaps
     expect(md).toBe(renderReply(WORKED_EXAMPLE, view, 'glyph'))
   }
   expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('🎯 **Safari checkout is fixed')
-  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('📋 **Why it broke**')
+  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('1. **Why it broke**')
+  expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).not.toContain('📋')
   expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('🔀 **How should we release the fix?**')
   expect(renderReply(WORKED_EXAMPLE, 'exec', 'emoji')).toContain('⚠️ Safari 16 was not tested.')
-  // A `#` heading becomes a bold line behind the icon; a headingless bullet keeps its list marker.
+  // A `#` heading becomes a bold, numbered line; a headingless bullet keeps its list marker and has no number or icon.
+  // Only a head with a tail after it is bold.
   const eight = 'one two three four five six seven eight'
-  expect(renderReply({ headline: 'A', body: `# Plan\n- ${eight}: t.` }, 'full')).toBe(`● **A**\n\n- ≡ **Plan**\n  - **${eight}**: t.`)
-  expect(renderReply({ headline: 'A', body: `- ${eight}: t.\n- ${eight} again` }, 'full')).toBe(`● **A**\n\n- ≡ **${eight}**: t.\n- **${eight} again**`)
+  expect(renderReply({ headline: 'A', body: `# Plan\n- ${eight}: t.` }, 'full')).toBe(`● **A**\n\n1. **Plan**\n   - **${eight}**: t.`)
+  expect(renderReply({ headline: 'A', body: `- ${eight}: t.\n- ${eight} again` }, 'full')).toBe(`● **A**\n\n- **${eight}**: t.\n- ${eight} again`)
 })
 
 test('the recommended option is first with a [Recommended] prefix, wherever it was given, and its head is the pick', () => {
@@ -313,9 +341,13 @@ test('the recommended option is first with a [Recommended] prefix, wherever it w
   expect(exec.indexOf('Wait a week and run')).toBeLessThan(exec.indexOf('Ship today to everyone'))
   expect(exec).not.toContain('Friday after a two hour watch [Recommended]')
   const last = { headline: 'A', decision: { choice: 'Go?', options: [{ head: 'Stay', body: 'd.', stance: 'option' }, { head: 'Go', body: 'c.', stance: 'recommended' }] } }
-  expect(renderReply(last, 'exec')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**\n  - **Stay**')
+  // An option head is plain in exec, where its body is hidden, and bold in full, where its body follows it.
+  expect(renderReply(last, 'exec')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] Go\n  - Stay')
   expect(renderReply(last, 'full')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**: c.\n  - **Stay**: d.')
   expect(renderReply(last, 'tldr')).toBe('● **A**\n\n◇ **Go?** Go')
+  // An option with no body has nothing after its head, so it is plain in full too.
+  const noBody = { headline: 'A', decision: { choice: 'Go?', options: [{ head: 'Stay', body: '', stance: 'option' }, { head: 'Go', body: 'c.', stance: 'recommended' }] } }
+  expect(renderReply(noBody, 'full')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**: c.\n  - Stay')
 })
 
 test('a bullet of the form Label: text gets a bold label (used by a past reply\'s outlines); a time, a URL, a code label or a long label does not', () => {
@@ -357,25 +389,27 @@ test('the body draws as an outline: L1 heads in exec, tails and L2 in full, L3 f
   ].join('\n')
   const input = { headline: 'A', body }
   expect(validateReply(input)).toEqual([])
-  const diagram = '- ≡ **Diagram**\n  ```\n  a --> b\n  ```'
-  // exec: headings and L1 heads only (a head with no tail is drawn the same), plus the whole diagram.
-  expect(renderReply(input, 'exec')).toBe(`● **A**\n\n- ≡ **Plan**\n  - **${a}**\n  - **${c}**\n\n${diagram}`)
-  // full: the tail joins its head; L2 and L3 nest, and the table and code keep their indentation inside the list item.
+  // The sections are numbered ordered-list items (the diagram is the second) and their lines nest under them by the width of `2. `.
+  const diagram = '2. **Diagram**\n   ```\n   a --> b\n   ```'
+  // exec: headings and L1 heads only, plain (nothing is drawn after a head, so none is bold), plus the whole diagram.
+  expect(renderReply(input, 'exec')).toBe(`● **A**\n\n1. **Plan**\n   - ${a}\n   - ${c}\n\n${diagram}`)
+  // full: the tail joins its head, which is bold now; a head with no tail stays plain. L2 and L3 nest, and the table and
+  // code keep their indentation inside the list item.
   expect(renderReply(input, 'full')).toBe(
     [
       '● **A**',
       [
-        '- ≡ **Plan**',
-        `  - **${a}**: Tail one.`,
-        `    - **${b}**: Tail two.`,
-        '      - L3 bullet',
-        '      | x | y |',
-        '      | - | - |',
-        '      ```',
-        '      code under L3',
-        '      ```',
-        '      Free prose.',
-        `  - **${c}**`,
+        '1. **Plan**',
+        `   - **${a}**: Tail one.`,
+        `     - **${b}**: Tail two.`,
+        '       - L3 bullet',
+        '       | x | y |',
+        '       | - | - |',
+        '       ```',
+        '       code under L3',
+        '       ```',
+        '       Free prose.',
+        `   - ${c}`,
       ].join('\n'),
       diagram,
     ].join('\n\n'),
@@ -384,10 +418,20 @@ test('the body draws as an outline: L1 heads in exec, tails and L2 in full, L3 f
   expect(renderReply(input, 'tldr')).toBe('● **A**')
   // L3 prose runs on from the line above it unless that line ends in a hard break.
   expect(renderReply({ headline: 'A', body: `**S**\n- ${a}: t.\n  - ${b}: t.\n    prose one.\n    prose two.` }, 'full')).toContain(
-    '    - **' + b + '**: t.  \n      prose one.  \n      prose two.',
+    '     - **' + b + '**: t.  \n       prose one.  \n       prose two.',
   )
-  // Without a heading the bullets are an unnamed section; its first line takes the icon after its list marker.
-  expect(renderReply({ headline: 'A', body: `- ${a}: Tail one.` }, 'exec')).toBe(`● **A**\n\n- ≡ **${a}**`)
+  // Without a heading the bullets are an unnamed section: no number and no icon, so it opens like any list.
+  expect(renderReply({ headline: 'A', body: `- ${a}: Tail one.` }, 'exec')).toBe(`● **A**\n\n- ${a}`)
+  // Sections count 1, 2, 3 in the order of the reply, a diagram section included; the unnamed section before the first heading has no number.
+  const three = { headline: 'A', body: [`- ${a}: t.`, '', '**One**', `- ${a}: t.`, '', '**Two**', `- ${b}: t.`, '', '**Three**', '```', 'a --> b', '```'].join('\n') }
+  expect(renderReply(three, 'exec')).toBe(
+    ['● **A**', `- ${a}`, `1. **One**\n   - ${a}`, `2. **Two**\n   - ${b}`, '3. **Three**\n   ```\n   a --> b\n   ```'].join('\n\n'),
+  )
+  // A number the model wrote itself (`1. `, `Step 2: `) is dropped, so a heading is never numbered twice.
+  expect(renderReply({ headline: 'A', body: `**1. Why**\n- ${a}: t.\n\n# Step 2: How\n- ${a}: t.` }, 'exec')).toBe(`● **A**\n\n1. **Why**\n   - ${a}\n\n2. **How**\n   - ${a}`)
+  // The marker widens from 10: its lines nest 4 spaces in, so they stay under the item (a loose ordered list keeps its numbers).
+  const many = { headline: 'A', body: Array.from({ length: 11 }, (_, i) => `**S${i + 1}**\n- ${a}: t.`).join('\n\n') }
+  expect(renderReply(many, 'full')).toContain(`9. **S9**\n   - **${a}**: t.\n\n10. **S10**\n    - **${a}**: t.\n\n11. **S11**\n    - **${a}**: t.`)
   // The terminal indents under a heading with a box; a head with children is in HEAD_UNITS.
   for (const unit of ['bodySection', 'decision', 'caveat', 'linksHeading'] as const) expect(HEAD_UNITS).toContain(unit)
 })
@@ -399,6 +443,13 @@ test('a headline-less reply, and a bold the model wrote itself', () => {
   // The closing text opens with an invisible marker; the icon keeps a bold that starts on punctuation rendering.
   expect(closingText({ headline: '"Yes" it is.' }, 'exec')).toBe(CLOSING_MARK + '● **"Yes" it is.**')
   expect(closingText({ headline: 'Yes it is.' }, 'exec')).toBe(CLOSING_MARK + '● **Yes it is.**')
+  // A `**` the model wrote around or inside a body head never makes it bold: only a tail drawn after it does.
+  const eight = 'one two three four five six seven eight'
+  const forced = { headline: 'A', body: `**S**\n- **${eight}**: **t**.\n- **${eight}:** t.\n- ${eight} **mid** word\n  - **${eight}**: t.\n- : **${eight}**` }
+  expect(renderReply(forced, 'exec')).toBe(`● **A**\n\n1. **S**\n   - ${eight}\n   - ${eight}\n   - ${eight} mid word\n   - ${eight}`)
+  expect(renderReply(forced, 'full')).toBe(
+    `● **A**\n\n1. **S**\n   - **${eight}**: **t**.\n   - **${eight}**: t.\n   - ${eight} mid word\n     - **${eight}**: t.\n   - ${eight}`,
+  )
 })
 
 test('the decision is one call with 2 to 4 whole plans: option count, exactly one recommended, a head of 8 to 15 words, a body of 3 sentences', () => {
@@ -524,7 +575,7 @@ test('the contract and the schema lead with headline and body, state the length 
     status: 'status is no longer a field: put it in the body, as a section of bullets',
     details: 'details is no longer a field: put it in the body, as L2 and L3 bullets under the L1 bullet they support',
     next: 'next is no longer a field: drop it, or make it a decision option',
-    questions: 'questions is no longer a field: answer in the headline, and give each question its own body section when there are several',
+    questions: 'questions is no longer a field: put the answer in the headline and the body',
     decisions: 'decisions is no longer a field: send one decision whose 2 to 4 options are whole plans',
   }
   for (const [key, issue] of Object.entries(removed)) expect(validateReply({ headline: 'A', [key]: LEGACY[key as keyof typeof LEGACY] ?? 'x' })).toEqual([issue])
@@ -541,8 +592,9 @@ test('a past reply still redraws: status, details, next, summary (before 0.1.14)
   const why = '- **The retry now covers the timeout path**'
   const q2 = '◆ **Can we ship Friday?** Yes, if QA signs off by Thursday.'
   const d = '◇ **Ship Friday or wait a week?** Ship Friday'
-  const heads = ['- [Recommended] **Ship Friday**', '- **Wait a week**']
+  const heads = ['- [Recommended] Ship Friday', '- Wait a week']
   const bodies = [': Customers get the fix 5 days sooner.', ': One more regression pass.']
+  const boldHeads = ['- [Recommended] **Ship Friday**', '- **Wait a week**']
   const next = '→ Want me to draft the QA sign-off request?'
   const rollout = nest('≡ **Rollout**', '- **Canary**: 5% on Thursday', '  - Watch the error dashboard for 2 hours')
   // The reply is drawn where its fields used to go: status after the headline, details and next after the caveat.
@@ -557,7 +609,7 @@ test('a past reply still redraws: status, details, next, summary (before 0.1.14)
       nest('▸ **Waiting on you**', '- **QA sign-off**: needed by Thursday', statusSub),
       nest(q1, why + ': The timeout path was the only one that dropped the session.', ...evidence),
       q2,
-      nest(d, ...heads.map((h, i) => h + bodies[i])),
+      nest(d, ...boldHeads.map((h, i) => h + bodies[i])),
       CAVEAT,
       rollout,
       next,
@@ -570,11 +622,11 @@ test('a past reply still redraws: status, details, next, summary (before 0.1.14)
   expect(renderReply(long, 'full')).toContain('  - **The retry covers the timeout path**: It was the only gap, e.g. 5 files.\n    - **Fix**: wrapper')
   // A 0.1.13 decision (options with name and consequence) draws as head and body.
   const v0113 = { headline: 'A', decision: { choice: 'Go?', options: [{ name: 'Stay', consequence: 'd.', stance: 'option' }, { name: 'Go', consequence: 'c.', stance: 'recommended' }] } }
-  expect(renderReply(v0113, 'exec')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**\n  - **Stay**')
+  expect(renderReply(v0113, 'exec')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] Go\n  - Stay')
   expect(renderReply(v0113, 'full')).toBe('● **A**\n\n- ◇ **Go?** Go\n  - [Recommended] **Go**: c.\n  - **Stay**: d.')
   // An `answer` is drawn as the headline (a headline wins over a stray one); `picked` reads as the stance.
   const old = { answer: 'A.', decisions: [{ choice: 'Go?', pick: 'Yes.', options: [{ name: 'Stay', consequence: 'd.', picked: false }, { name: 'Go', consequence: 'c.', picked: true }] }] }
-  expect(renderReply(old, 'exec')).toBe('● **A.**\n\n- ◇ **Go?** Yes.\n  - [Recommended] **Go**\n  - **Stay**')
+  expect(renderReply(old, 'exec')).toBe('● **A.**\n\n- ◇ **Go?** Yes.\n  - [Recommended] Go\n  - Stay')
   expect(renderReply(old, 'tldr')).toBe('● **A.**\n\n◇ **Go?** Yes.')
   expect(renderReply({ answer: 'Old.', headline: 'New' }, 'exec')).toBe('● **New**')
   // A malformed old field draws as nothing and never throws.
@@ -620,7 +672,7 @@ test('literal backslash-n escapes become real line breaks, except in code spans 
   expect(renderReply({ headline: 'Run `printf "a\\nb"`\\nDone' }, 'full')).toBe('● **Run `printf "a\\nb"`**  \n**Done**')
   const escaped = { headline: 'A', body: `**S**\\n- ${eight}: t.\\n  - ${eight} too: t.` }
   expect(validateReply(escaped)).toEqual([])
-  expect(renderReply(escaped, 'exec')).toContain(`- ≡ **S**\n  - **${eight}**`)
+  expect(renderReply(escaped, 'exec')).toContain(`1. **S**\n   - ${eight}`)
   expect(renderReply({ headline: 'A', caveats: [{ text: 'T.', details: 'a\\nb' }] }, 'full')).toContain('- ⚠ T.\n  - a\n  - b')
   // A Windows path in a link is never touched.
   expect(renderReply({ headline: 'A', links: [{ label: 'L', path: 'C:\\new\\tmp.html' }] }, 'tldr')).toContain('(file:///C:/new/tmp.html)')
@@ -645,10 +697,13 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
   const markdown = (await ui.findAll({ type: 'Markdown' })).map(node => node.text).join('\n\n')
   expect(markdown).toContain(HEAD)
-  // The body: headings and L1 heads from exec, tails, L2, L3 (a table here) and caveat details in full only.
-  expect(markdown.includes(SECTION_1)).toBe(view !== 'tldr')
-  expect(markdown.includes(L1_1)).toBe(view !== 'tldr')
-  expect(markdown.includes(L1_1 + L1_1_TAIL)).toBe(view === 'full')
+  // The body: numbered headings (1., 2.) and L1 heads from exec, the head plain until its tail follows it; tails, L2, L3
+  // (a table here) and caveat details in full only.
+  expect(markdown.includes(TERM_SECTION_1)).toBe(view !== 'tldr')
+  expect(markdown.includes(TERM_SECTION_2)).toBe(view !== 'tldr')
+  expect(markdown).not.toMatch(/^\d+\. /m)
+  expect(markdown.includes(L1_1)).toBe(view === 'exec')
+  expect(markdown.includes(L1_1_FULL)).toBe(view === 'full')
   expect(markdown.includes('retry wrapper')).toBe(view === 'full')
   // The table keeps its indentation under its L2 bullet, inside the box as in the markdown path.
   expect(markdown.includes(`${L2_2}\n${TABLE.join('\n')}`)).toBe(view === 'full')
@@ -663,10 +718,18 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
     expect(await props(/Recommended/)).toBeUndefined()
     expect(markdown).not.toContain('Links')
   } else {
+    // The tag stays bold green in both views; an option head keeps its stance color but is bold only in full, where its body follows it.
     expect(await props(/^\[Recommended\] $/)).toMatchObject({ color: 'green', weight: 'bold' })
-    expect(await props(new RegExp(`^${PICK}$`))).toMatchObject({ color: 'green', weight: 'bold' })
-    expect(await props(/^Wait a week and run the full regression pass first$/)).toMatchObject({ color: 'blue', weight: 'bold' })
-    expect(await props(/^Ship today to everyone and skip the QA sign-off entirely$/)).toMatchObject({ color: 'red', weight: 'bold' })
+    const heads: [RegExp, string][] = [
+      [new RegExp(`^${PICK}$`), 'green'],
+      [/^Wait a week and run the full regression pass first$/, 'blue'],
+      [/^Ship today to everyone and skip the QA sign-off entirely$/, 'red'],
+    ]
+    for (const [pattern, color] of heads) {
+      const head = await props(pattern)
+      expect(head).toMatchObject({ color })
+      expect(head?.weight).toBe(view === 'full' ? 'bold' : undefined)
+    }
     expect(markdown).toContain('↗ **Links**')
     // An option's body joins its head as plain text in full only.
     expect((await props(/^: Customers get the fix 5 days sooner/)) !== undefined).toBe(view === 'full')
@@ -678,11 +741,18 @@ const expectTerminalReply = async (ui: Mounted, view: 'tldr' | 'exec' | 'full') 
   const row = await ui.find({ type: 'Text', text: /Test report/ })
   expect(row?.props).toEqual({})
   expect(row?.children[0]).toBe('- ')
-  // Under a head the terminal indents with a box two cells in, the head outside it; the markdown inside stays flat.
-  const indented = (await ui.findAll({ type: 'Box' })).filter(box => box.props.paddingLeft === 2).map(box => box.text).join('\n')
+  // Under a head the terminal indents with a box, the head outside it; the markdown inside stays flat. The box is as wide
+  // as the head's marker: 3 cells under a numbered section (`1. `), 2 under any other head.
+  const boxes = (await ui.findAll({ type: 'Box' })).filter(box => box.props.paddingLeft !== undefined)
+  const under = (padding: number) => boxes.filter(box => box.props.paddingLeft === padding)
+  const underSections = under(3).map(box => box.text).join('\n')
+  const indented = under(2).map(box => box.text).join('\n')
+  expect(under(3)).toHaveLength(view === 'tldr' ? 0 : 2)
   expect(markdown).not.toMatch(/^- [▸◆◇↗≡⚠]/m)
-  expect(indented.includes(L1_1)).toBe(view !== 'tldr')
-  expect(indented).not.toContain(SECTION_1)
+  expect(underSections.includes(view === 'full' ? L1_1_FULL : L1_1)).toBe(view !== 'tldr')
+  expect(underSections).not.toContain(TERM_SECTION_1)
+  expect(indented).not.toContain(L1_1)
+  expect(indented).not.toContain(TERM_SECTION_1)
   expect(indented).not.toContain(D1)
   expect(indented.includes(CAVEAT_DETAILS)).toBe(view === 'full')
 }
@@ -796,6 +866,24 @@ test('the respond row draws the reply in full while reply-tool is off with no fo
     const reply = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: ROW, requestId: 'tu1' })
     if (surface === 'terminal') {
       await expectTerminalReply(reply, 'full')
+      // Sections are numbered 1, 2, 3 in the order of the reply (a diagram section counts, the unnamed section before the
+      // first heading does not), the number drawn as literal text (`1\. `), and the box under each is as wide as its
+      // marker: 3 cells, 4 from `10. `.
+      const w9 = words(9)
+      const drawn = async (body: string) => {
+        const numbered = await $.ui.mount({ plugin: 'reply-tool', surface, component: 'ToolUse', props: { ...ROW, input: { headline: 'A', body } }, requestId: 'tu6' })
+        const headings = (await numbered.findAll({ type: 'Markdown' })).map(node => node.text).filter(text => /^\d+\\\. /.test(text))
+        const padding = (await numbered.findAll({ type: 'Box' })).map(box => box.props.paddingLeft).filter(pad => pad !== undefined)
+        await numbered.unmount()
+        return { headings, padding }
+      }
+      expect(await drawn([`- ${w9}: t.`, '**One**', `- ${w9}: t.`, '**Two**', `- ${w9}: t.`, '**Three**', '```', 'a --> b', '```'].join('\n'))).toEqual({
+        headings: ['1\\. **One**', '2\\. **Two**', '3\\. **Three**'],
+        padding: [3, 3, 3],
+      })
+      const eleven = await drawn(Array.from({ length: 11 }, (_, i) => `**S${i + 1}**\n- ${w9}: t.`).join('\n'))
+      expect(eleven.headings.slice(8)).toEqual(['9\\. **S9**', '10\\. **S10**', '11\\. **S11**'])
+      expect(eleven.padding).toEqual([3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4])
     } else {
       // The hook drew (not the engine's own row) and the tree validates; markdown cannot nest a list under a paragraph,
       // so a heading is a list item with its lines nested under it, and so is the closing text a surface without a row shows.
@@ -1042,6 +1130,9 @@ test('the level table: the headline and the decision line are tldr, headings and
   expect([LEVELS.bodyTail, LEVELS.bodyL2, LEVELS.bodyL3, LEVELS.optionBody, LEVELS.caveatDetails]).toEqual([3, 3, 3, 3, 3])
   // LEGACY units keep the levels they had.
   expect([LEVELS.summary, LEVELS.statusSection, LEVELS.statusBullet, LEVELS.statusSub, LEVELS.next]).toEqual([3, 2, 2, 3, 1])
-  expect(ICONS.glyph.body).toBe('≡')
-  expect(ICONS.emoji.body).toBe('📋')
+  // A body section has no icon (it opens with its number); a LEGACY `details` section keeps its own.
+  expect(Object.keys(ICONS.glyph)).not.toContain('body')
+  expect(Object.keys(ICONS.emoji)).not.toContain('body')
+  expect(ICONS.glyph.details).toBe('≡')
+  expect(ICONS.emoji.details).toBe('📋')
 })

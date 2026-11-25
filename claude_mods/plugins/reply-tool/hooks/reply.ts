@@ -518,7 +518,7 @@ export function validateReply(raw: unknown): string[] {
     ['status', 'put it in the body, as a section of bullets'],
     ['details', 'put it in the body, as L2 and L3 bullets under the L1 bullet they support'],
     ['next', 'drop it, or make it a decision option'],
-    ['questions', 'answer in the headline, and give each question its own body section when there are several'],
+    ['questions', 'put the answer in the headline and the body'],
     ['decisions', 'send one decision whose 2 to 4 options are whole plans'],
   ]
   for (const [key, where] of removed) if (isSent(key)) issues.push(`${key} is no longer a field: ${where}`)
@@ -724,14 +724,14 @@ export type Unit =
  */
 export const LEVELS: Record<Unit, Depth> = {
   headline: 1, // bold summary of the whole reply
-  bodySection: 2, // a body section heading
-  bodyHead: 2, // an L1 bullet: its head, bold
+  bodySection: 2, // a body section heading: `1. **Heading**`, numbered in the order of the reply
+  bodyHead: 2, // an L1 bullet: its head, plain (bold only once its tail is drawn after it)
   bodyTail: 3, // an L1 bullet's tail, after its head
-  bodyL2: 3, // an L2 bullet (`head: tail`), or a table or code block nested at L2
+  bodyL2: 3, // an L2 bullet (`head: tail`, bold head only with a tail), or a table or code block nested at L2
   bodyL3: 3, // L3: freeform markdown under an L2 bullet
   bodyDiagram: 2, // a diagram section's fenced block
   decision: 1, // the `**choice** <recommended option head>` line
-  option: 2, // `- [Recommended] **Head**`
+  option: 2, // `- [Recommended] Head`: plain, bold only once its body is drawn after it
   optionBody: 3, // the option's `: body`, after its head
   caveat: 2, // `⚠ text`
   caveatDetails: 3, // a caveat's details, nested under it
@@ -763,19 +763,30 @@ export const HEAD_UNITS: readonly Unit[] = [
   'verdict',
 ]
 
-/** The icon that opens the first line of each kind of block, in two sets. `question`, `details`, `status` and `next` are LEGACY (drawn only for a reply from before 0.1.14). */
+/**
+ * The icon that opens the first line of each kind of block, in two sets. A body section has none: it opens with its number
+ * (see bodyBlocks). `question`, `details`, `status` and `next` are LEGACY (drawn only for a reply from before 0.1.14).
+ */
 export const ICONS = {
-  glyph: { answer: '●', question: '◆', decision: '◇', caveat: '⚠', body: '≡', details: '≡', status: '▸', next: '→', links: '↗' },
-  emoji: { answer: '🎯', question: '💬', decision: '🔀', caveat: '⚠️', body: '📋', details: '📋', status: '📍', next: '➡️', links: '🔗' },
+  glyph: { answer: '●', question: '◆', decision: '◇', caveat: '⚠', details: '≡', status: '▸', next: '→', links: '↗' },
+  emoji: { answer: '🎯', question: '💬', decision: '🔀', caveat: '⚠️', details: '📋', status: '📍', next: '➡️', links: '🔗' },
 } as const
 export type IconSet = keyof typeof ICONS
 /** The set in use: glyphs, which every terminal font draws. */
 export const ICON_SET: IconSet = 'glyph'
 
-/** A line that grows when a later unit shows: `extend` is appended once `extendUnit` (the evidence of a LEGACY reason when absent) is at or below the view. */
+/**
+ * A line that grows when a later unit shows: `extend` is appended once `extendUnit` (the evidence of a LEGACY reason when
+ * absent) is at or below the view. A markdown line takes it into its text; a `bullet` or an `option` takes it as its `tail`.
+ */
 type Grows = { extend?: string; extendUnit?: Unit }
 export type Line =
-  | ({ kind: 'md'; unit: Unit; via?: Unit[]; text: string; isCode?: boolean; isProse?: boolean } & Grows)
+  // `ordinal` is set on a numbered body section heading, whose `text` is `N. **Heading**`, an ordered-list item. The
+  // terminal draws that number as literal text instead (see literalOrdinal).
+  | ({ kind: 'md'; unit: Unit; via?: Unit[]; text: string; ordinal?: number; isCode?: boolean; isProse?: boolean } & Grows)
+  // An L1 or L2 body bullet: its list `marker` (indent included), its `head` with no `**`, and its `tail` once it is drawn
+  // (`: tail`). The head is bold only when a tail follows it.
+  | ({ kind: 'bullet'; unit: Unit; via?: Unit[]; marker: string; head: string; tail?: string } & Grows)
   | ({ kind: 'option'; unit: Unit; via?: Unit[]; option: ReplyOption; tail?: string } & Grows)
   | { kind: 'link'; unit: Unit; via?: Unit[]; link: ReplyLink }
 export type Block = Line[]
@@ -906,8 +917,16 @@ export type BodyRow = BodyBullet | BodyBlock
 /** A heading and what follows it; `topFences` counts the code blocks written at the top of the section. */
 export type BodySection = { heading: string | undefined; rows: BodyRow[]; topFences: number }
 
-/** A section heading as it reads: no `#`, no `**`, no trailing colon. */
-const headingText = (line: string): string => stripBold(line.trim().replace(/^#{1,6}\s+/, '')).replace(/[:\s]+$/, '').trim()
+/**
+ * A section heading as it reads: no `#`, no `**`, no trailing colon, and no number the model wrote itself (`1. `, `2) `,
+ * `Step 3: `, `Part 2. `, `Section 4) `), since the drawing numbers the sections.
+ */
+const headingText = (line: string): string =>
+  stripBold(line.trim().replace(/^#{1,6}\s+/, ''))
+    .replace(/[:\s]+$/, '')
+    .replace(/^\s*\d+[.)]\s+/, '')
+    .replace(/^\s*(?:Step|Part|Section)\s+\d+[:.)-]?\s+/i, '')
+    .trim()
 
 /**
  * A bullet's text as `head: tail`. The head is the text before the first colon that is followed by a space or the line
@@ -1075,19 +1094,30 @@ export function withIcon(text: string, icon: string): string {
 }
 
 type MdLine = Extract<Line, { kind: 'md' }>
+type BulletLine = Extract<Line, { kind: 'bullet' }>
 type Icons = (typeof ICONS)[IconSet]
 const mdLine = (unit: Unit, text: string, via?: Unit[]): MdLine => ({ kind: 'md', unit, ...(via === undefined ? {} : { via }), text })
+const bulletLine = (unit: Unit, marker: string, head: string, via?: Unit[]): BulletLine => ({
+  kind: 'bullet',
+  unit,
+  ...(via === undefined ? {} : { via }),
+  marker,
+  head,
+})
 
 /** The units of the body's bullets by level (L1, L2, L3): a line hangs from the units of the levels above it. */
 const BODY_LEVEL_UNITS: readonly Unit[] = ['bodyHead', 'bodyL2', 'bodyL3']
 
 /**
- * The body as blocks, one per section: its heading (a bold line behind the body icon), then its rows. An L1 bullet is
- * its head in bold, with its tail as an `extend` that joins it once the tail shows; an L2 bullet is `**head**: tail`
- * whole; L3 is drawn as it was written. A diagram section draws its fenced block as one unit.
+ * The body as blocks, one per section: its heading, numbered `1. **Heading**` in the order of the reply (a diagram
+ * section counts; the unnamed section before the first heading has no number), then its rows. An L1 or L2 bullet keeps
+ * its head and its tail apart: an L1 tail is an `extend` that joins its head once the tail shows, an L2 tail is drawn
+ * with its bullet. The head is bold only when a tail follows it (see lineMarkdown), and any `**` the model wrote in it is
+ * dropped, so it cannot force bold. L3 is drawn as it was written. A diagram section draws its fenced block as one unit.
  */
-function bodyBlocks(body: string, icon: Icons): Block[] {
+function bodyBlocks(body: string): Block[] {
   const blocks: Block[] = []
+  let count = 0
   for (const section of parseBody(body)) {
     const block: Block = []
     const isDiagramSection = isDiagram(section)
@@ -1096,7 +1126,10 @@ function bodyBlocks(body: string, icon: Icons): Block[] {
       const up: Unit[] = [...(section.heading === undefined ? [] : (['bodySection'] as const)), ...BODY_LEVEL_UNITS.slice(0, level - 1)]
       return up.length === 0 ? undefined : up
     }
-    if (section.heading !== undefined) block.push(mdLine('bodySection', withIcon(`**${section.heading}**`, icon.body)))
+    if (section.heading !== undefined) {
+      count += 1
+      block.push({ ...mdLine('bodySection', `${count}. **${section.heading}**`), ordinal: count })
+    }
     for (const row of section.rows) {
       const unit: Unit = isDiagramSection ? 'bodyDiagram' : (BODY_LEVEL_UNITS[Math.min(row.level, 3) - 1] ?? 'bodyL3')
       const via = hang(isDiagramSection ? 1 : row.level)
@@ -1110,17 +1143,12 @@ function bodyBlocks(body: string, icon: Icons): Block[] {
         block.push(mdLine(unit, `${pad}- ${row.text}`, via))
         continue
       }
-      const head = row.head === '' ? row.tail : row.head
+      const head = stripBold(row.head === '' ? row.tail : row.head)
       const tail = row.head === '' ? '' : row.tail
-      if (row.level === 1) {
-        const line = mdLine(unit, `${pad}- **${head}**`, via)
-        block.push(tail === '' ? line : { ...line, extend: `: ${tail}`, extendUnit: 'bodyTail' })
-      } else {
-        block.push(mdLine(unit, `${pad}- **${head}**${tail === '' ? '' : `: ${tail}`}`, via))
-      }
+      const line = bulletLine(unit, `${pad}- `, head, via)
+      if (tail === '') block.push(line)
+      else block.push(row.level === 1 ? { ...line, extend: `: ${tail}`, extendUnit: 'bodyTail' } : { ...line, tail: `: ${tail}` })
     }
-    const first = block[0]
-    if (section.heading === undefined && first !== undefined && first.kind === 'md') first.text = withIcon(first.text, icon.body)
     if (block.length > 0) blocks.push(block)
   }
   return blocks
@@ -1204,7 +1232,7 @@ export function buildBlocks(raw: unknown, icons: IconSet = ICON_SET): Block[] {
   if (top.length > 0) blocks.push(top)
 
   blocks.push(...legacyOpening(legacy, icon))
-  blocks.push(...bodyBlocks(reply.body, icon))
+  blocks.push(...bodyBlocks(reply.body))
 
   // The one decision shows the recommended option's head as its pick. A past reply's `decisions[]` (LEGACY) each
   // carry their own `pick` and draw the same way.
@@ -1256,13 +1284,17 @@ export function viewBlocks(raw: unknown, view: ReplyView, icons: IconSet = ICON_
     .filter(block => block.length > 0)
 }
 
+/** A head and its tail: the head is bold only when a tail is drawn after it, plain when it stands alone. */
+const headAndTail = (head: string, tail: string | undefined): string => (tail === undefined || tail === '' ? head : `**${head}**${tail}`)
+
 /** One line as markdown. */
 export function lineMarkdown(line: Line): string {
   if (line.kind === 'md') return line.text
   if (line.kind === 'link') return `- ${renderLink(line.link)}`
+  if (line.kind === 'bullet') return `${line.marker}${headAndTail(line.head, line.tail)}`
   const { option } = line
   const tag = option.stance === 'recommended' ? `${RECOMMENDED_TAG} ` : ''
-  return `- ${tag}**${escapeMarkdown(oneLine(option.head))}**${line.tail ?? ''}`
+  return `- ${tag}${headAndTail(escapeMarkdown(oneLine(option.head)), line.tail)}`
 }
 
 /**
@@ -1278,22 +1310,44 @@ export function joinMarkdown(lines: Line[]): string {
   }
   const isProse = (line: Line | undefined): boolean => line?.kind === 'md' && line.isProse === true
   const needsBreak = (line: Line, next: Line | undefined): boolean =>
-    (isPlain(line) && isPlain(next)) || (isProse(next) && line.kind === 'md' && line.isCode !== true && !TABLE.test(line.text))
+    (isPlain(line) && isPlain(next)) ||
+    (isProse(next) && (line.kind === 'bullet' || (line.kind === 'md' && line.isCode !== true && !TABLE.test(line.text))))
   return lines.map((line, i) => (needsBreak(line, lines[i + 1]) ? `${lineMarkdown(line)}  ` : lineMarkdown(line))).join('\n')
 }
 
 /**
+ * The width of the list marker a head is drawn behind, which is how far the lines under it step in: 2 for `- `, 3 for
+ * a numbered section's `1. `, 4 for `10. `. Markdown nests a list under an item only by that width; the terminal pads its box by it.
+ */
+export function markerWidth(head: Line): number {
+  return head.kind === 'md' && head.ordinal !== undefined ? `${head.ordinal}. `.length : 2
+}
+
+/**
+ * A numbered section heading as the terminal draws it: the period after the number is escaped (`2\. **Heading**`), so
+ * the heading is literal text, not an ordered-list item. The terminal draws each heading as its own Markdown element,
+ * and a renderer that ignored a list's start number would draw every one as `1.`. Any other line is returned as it is.
+ * The markdown path keeps the real list item, which CommonMark numbers from its start.
+ */
+export function literalOrdinal(line: Line): Line {
+  if (line.kind !== 'md' || line.ordinal === undefined) return line
+  return { ...line, text: `${line.ordinal}\\. ${line.text.slice(`${line.ordinal}. `.length)}` }
+}
+
+/**
  * A block as markdown. Markdown cannot nest a list under a paragraph, so a head with lines under it (HEAD_UNITS)
- * becomes a top-level list item and every line under it takes two more spaces: its bullets are a nested list, their
- * own bullets nest deeper, and code under a bullet stays inside it. Any other block is joinMarkdown as it is. The
- * terminal does not use this: it indents the lines under a head with a box.
+ * becomes a top-level list item (a numbered section is already one: `1. **Heading**`) and every line under it steps in
+ * by the width of its marker: its bullets are a nested list, their own bullets nest deeper, and code under a bullet
+ * stays inside it. Any other block is joinMarkdown as it is. The terminal does not use this: it indents the lines under
+ * a head with a box.
  */
 export function blockMarkdown(block: Block): string {
   const head = block[0]
   const rows = joinMarkdown(block).split('\n')
   if (head === undefined || block.length < 2 || !HEAD_UNITS.includes(head.unit)) return rows.join('\n')
   const [first = '', ...rest] = rows
-  return [isBulletText(first) ? first : `- ${first}`, ...rest.map(row => (row === '' ? row : `  ${row}`))].join('\n')
+  const pad = ' '.repeat(markerWidth(head))
+  return [isBulletText(first) ? first : `- ${first}`, ...rest.map(row => (row === '' ? row : `${pad}${row}`))].join('\n')
 }
 
 /** The reply as one markdown string for a view: blocks separated by one blank line. */
@@ -1430,7 +1484,7 @@ export const CONTRACT_ID = 'reply-tool:contract'
 
 const RULES = [
   '1. `headline` is a bold summary of the whole reply: at most 3 sentences and 60 words, with no ids, paths, URLs or code. It is shown in every view, so it must stand alone. Say each fact once: never repeat the headline anywhere else, and a body heading or L1 head that mostly restates it is rejected.',
-  '2. `body` is the only place for explanation, progress and evidence: a markdown outline of sections, each a heading (a `#` heading or a bold-only line of at most 10 words) followed by bullets; bullets before the first heading are fine. Bullets nest at most 3 levels: L1, then L2 (indented 2 spaces), then L3 (indented 4). Every L1 and L2 bullet is `head: tail` with an 8 to 15 word head that reads as a sentence; L1 tails are one sentence, L2 tails up to two. L3 is freeform markdown (tables, code, lists) for evidence and detail: anything indented under an L2 bullet, with no head and no limits. Every other line is a heading or a bullet, never a plain paragraph, and a table or code block is nested under a bullet.',
+  '2. `body` is the only place for explanation, progress and evidence: a markdown outline of sections, each a heading (a `#` heading or a bold-only line of at most 10 words) followed by bullets (the mod numbers sections; don\'t number them yourself); bullets before the first heading are fine. Bullets nest at most 3 levels: L1, then L2 (indented 2 spaces), then L3 (indented 4). Every L1 and L2 bullet is `head: tail` with an 8 to 15 word head that reads as a sentence; L1 tails are one sentence, L2 tails up to two. L3 is freeform markdown (tables, code, lists) for evidence and detail: anything indented under an L2 bullet, with no head and no limits. Every other line is a heading or a bullet, never a plain paragraph, and a table or code block is nested under a bullet.',
   '3. The lengths decide where things land: put short claims in heads and tails, and dump detail in L3. tldr draws the headline, the decision pick and the links; exec adds the section headings, the L1 heads, every option head and the caveats; full adds the L1 tails, L2 and L3, the option bodies and the caveat details.',
   '4. Ids, paths, URLs and inline code are rejected in the headline, section headings, L1 heads and tails, the decision and the caveat text. They are allowed from L2 down, so evidence goes in L2 and L3, and deliverables go in links.',
   '5. Only when the user asks for a diagram: give it its own section, a heading followed by one fenced code block, with nothing else in that section. It is drawn in exec and full.',
